@@ -1,5 +1,7 @@
 # Use case: x402-gated cross-chain swaps (the resource is the routing itself)
 
+> **Status: Implemented (2026-05-07).** This brainstorm doc is preserved as the original product brief. The verdict in §7 ("yes, but as a sibling product") was overridden — the user opted to fully convert the codebase into a swap-only service rather than keeping merchant mode alongside. See [implementation_plan.md](implementation_plan.md) for the executed plan, [README.md](README.md) for the live shape of the service, and [docs/USER_GUIDE.md](docs/USER_GUIDE.md) for the buyer-facing flow.
+
 > **Brainstorm doc.** Not a build plan. Asks the question: *should this gateway also support a flow where the x402 buyer is paying for a cross-chain swap to their own address, instead of paying a merchant for content?*
 
 ---
