@@ -103,6 +103,23 @@ describe("loadConfigFromEnv", () => {
     expect(() => loadConfigFromEnv({} as NodeJS.ProcessEnv)).toThrow();
   });
 
+  it("treats empty-string env vars as 'unset' for optional/defaulted string fields", () => {
+    // Regression: `dotenv` sets `process.env.X = ""` for blank `.env` lines
+    // like `PUBLIC_BASE_URL=`. Without empty-string handling, `.url()` rejects
+    // (would crash boot) and `.default()` is overridden with the empty string.
+    const cfg = loadConfigFromEnv({
+      ...validEnv(),
+      PUBLIC_BASE_URL: "",
+      ONE_CLICK_BASE_URL: "",
+      TOKEN_NAME: "",
+      TOKEN_VERSION: "",
+    } as unknown as NodeJS.ProcessEnv);
+    expect(cfg.publicBaseUrl).toBeUndefined();
+    expect(cfg.oneClickBaseUrl).toBe("https://1click.chaindefuser.com"); // default applied
+    expect(cfg.tokenName).toBe("USD Coin");
+    expect(cfg.tokenVersion).toBe("2");
+  });
+
   it("parses ALLOWED_ORIGINS as a trimmed comma list; leaves undefined for unset/empty/whitespace-only", () => {
     expect(
       loadConfigFromEnv({

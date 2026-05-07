@@ -126,16 +126,25 @@ export type GatewayConfig = z.infer<typeof GatewayConfigSchema>;
  * Comma-separated `ORIGIN_RPC_URLS` are split into an array; boolean and
  * numeric env vars are coerced from their string representations.
  *
+ * Empty-string env vars (e.g. `PUBLIC_BASE_URL=` in `.env`) are treated as
+ * "unset" — falling through to the schema's `.default()` or remaining
+ * undefined for `.optional()` fields. Without this, `dotenv` would set
+ * `process.env.X = ""`, which then fails `.url()` / overrides defaults
+ * with empty strings.
+ *
  * @throws {z.ZodError} if validation fails — caller should log and exit.
  */
 export function loadConfigFromEnv(env: NodeJS.ProcessEnv = process.env): GatewayConfig {
+  // Helper: treat empty strings as "unset" for optional/defaulted string fields.
+  const orUndef = (v: string | undefined): string | undefined => (v && v.length > 0 ? v : undefined);
+
   const raw = {
     oneClickJwt: env.ONE_CLICK_JWT,
-    oneClickBaseUrl: env.ONE_CLICK_BASE_URL ?? undefined,
+    oneClickBaseUrl: orUndef(env.ONE_CLICK_BASE_URL),
     originNetwork: env.ORIGIN_NETWORK,
     originAssetIn: env.ORIGIN_ASSET_IN,
     originTokenAddress: env.ORIGIN_TOKEN_ADDRESS,
-    originRpcUrls: env.ORIGIN_RPC_URLS?.split(",").map((u) => u.trim()) ?? [],
+    originRpcUrls: env.ORIGIN_RPC_URLS?.split(",").map((u) => u.trim()).filter(Boolean) ?? [],
     facilitatorPrivateKey: env.FACILITATOR_PRIVATE_KEY,
     gatewayRefundAddress: env.GATEWAY_REFUND_ADDRESS,
     operatorMarginBps: env.OPERATOR_MARGIN_BPS ? Number(env.OPERATOR_MARGIN_BPS) : undefined,
@@ -160,13 +169,13 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv = process.env): Gateway
     quoteGcGracePeriodMs: env.QUOTE_GC_GRACE_PERIOD_MS
       ? Number(env.QUOTE_GC_GRACE_PERIOD_MS)
       : undefined,
-    tokenName: env.TOKEN_NAME ?? undefined,
-    tokenVersion: env.TOKEN_VERSION ?? undefined,
+    tokenName: orUndef(env.TOKEN_NAME),
+    tokenVersion: orUndef(env.TOKEN_VERSION),
     tokenSupportsEip3009: env.TOKEN_SUPPORTS_EIP3009
       ? env.TOKEN_SUPPORTS_EIP3009.toLowerCase() === "true"
       : undefined,
     allowedOrigins: parseAllowedOrigins(env.ALLOWED_ORIGINS),
-    publicBaseUrl: env.PUBLIC_BASE_URL ?? undefined,
+    publicBaseUrl: orUndef(env.PUBLIC_BASE_URL),
     ownershipProofs: parseCommaList(env.OWNERSHIP_PROOFS),
   };
 
