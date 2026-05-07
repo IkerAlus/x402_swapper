@@ -10,25 +10,22 @@
  * `extensions.crossChain` field (CrossChainSettlementExtra). The 200 body
  * is `{}` by design (D14 in implementation_plan.md).
  *
- * Usage:
- *   # First start the gateway in another terminal:
+ *   # Usage —
+ *
+ *   # 1. Start the gateway in another terminal:
  *   #   npx env-cmd npx tsx src/server.ts
  *
- *   # Then run this client (dry run — no real funds):
- *   npx tsx scripts/test-client.ts
+ *   # 2. Edit the BUYER_INPUTS object below to match your destination.
  *
- *   # Or with real signing (you must fund the buyer wallet on the origin chain):
- *   DRY_RUN=false BUYER_PRIVATE_KEY=0x... npx tsx scripts/test-client.ts
+ *   # 3. Run a dry run to see the 402 envelope without spending anything:
+ *   #   npx tsx scripts/test-client.ts
  *
- *   # Customise the destination via env:
- *   SWAP_DESTINATION_CHAIN=arbitrum \
- *   SWAP_DESTINATION_ASSET=nep141:arb-0xaf88...omft.near \
- *   SWAP_DESTINATION_ADDRESS=0xBuyerArbAddress \
- *   SWAP_AMOUNT_IN=10000000 \
- *   DRY_RUN=false BUYER_PRIVATE_KEY=0x... npx tsx scripts/test-client.ts
+ *   # 4. Run for real (REAL FUNDS MOVE — use small amounts!):
+ *   #   DRY_RUN=false BUYER_PRIVATE_KEY=0x... npx tsx scripts/test-client.ts
  *
- * ⚠️  WARNING: With a funded buyer wallet and a live gateway, this
- *    script will attempt a REAL on-chain payment. Use small amounts.
+ * ⚠️  WARNING: With a funded buyer wallet and DRY_RUN=false, this script
+ *    will attempt a REAL on-chain payment. Funds go to whichever address
+ *    you put in `destinationAddress` — make sure it's an account you own.
  */
 
 import { ethers } from "ethers";
@@ -40,30 +37,71 @@ import {
 } from "@x402/evm";
 
 // ═══════════════════════════════════════════════════════════════════════
-// Configuration
+// ▼▼▼ EDIT ME — buyer's swap parameters ▼▼▼
+//
+// These are the inputs the buyer sends as query params on GET /api/swap.
+// Edit them to point at YOUR destination. The buyer's private key is
+// supplied via the BUYER_PRIVATE_KEY env var (kept out of source for
+// security), and DRY_RUN is the run-mode toggle.
+// ═══════════════════════════════════════════════════════════════════════
+
+const BUYER_INPUTS = {
+  /** Chain prefix the buyer wants to receive on. */
+  destinationChain: "near",
+
+  /** 1CS NEP-141 asset ID. Examples below. */
+  destinationAsset:
+    "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
+  // EVM examples (uncomment + adjust to match `destinationChain`):
+  //   "nep141:arb-0xaf88d065e77c8cc2239327c5edb3a432268e5831.omft.near"   // USDC on Arbitrum
+  //   "nep141:eth-0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48.omft.near"   // USDC on Ethereum
+  //   "nep141:polygon-0x3c499c542cef5e3811e1192ce70d8cc03d5c3359.omft.near" // USDC on Polygon
+  //   "nep141:op-0x0b2c639c533813f4aa9d7837caf62653d097ff85.omft.near"   // USDC on Optimism
+  // Non-EVM examples:
+  //   "nep141:solana-EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v.omft.near" // USDC on Solana
+  //   "nep141:stellar-GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN.omft.near" // USDC on Stellar
+
+  /** Recipient on the destination chain. Format must match the chain. */
+  destinationAddress: "ikeralus.near", // ← REPLACE with an account YOU control
+
+  /** Origin amount the buyer pays, in USDC smallest unit (6 decimals on Base). */
+  amountIn: "10000", // 1 USDC
+
+  /**
+   * Optional: refund target if 1CS fails the swap. Strongly recommended —
+   * without it, refunds go to the gateway's wallet and the operator has
+   * to forward manually. Must be an EVM address (0x + 40 hex). Set to
+   * `null` to skip and use the gateway fallback.
+   */
+  refundAddress: "0xCB2233Ac1D0Fc79082026c1E7DeB3E93132BFDE3", // e.g. "0xYourEvmRefundAddress"
+};
+
+// ═══════════════════════════════════════════════════════════════════════
+// ▲▲▲ EDIT ME ▲▲▲
+// Below: env-driven knobs (gateway URL, run-mode) and the rest of the
+// flow. You shouldn't need to touch these.
 // ═══════════════════════════════════════════════════════════════════════
 
 const GATEWAY_URL = process.env.GATEWAY_URL ?? "http://localhost:3402";
 const RESOURCE_PATH = process.env.RESOURCE_PATH ?? "/api/swap";
 
-// Default: Hardhat test wallet #0 — has no funds on real chains
+// Default: Hardhat test wallet #0 — has no funds on real chains, so dry runs
+// are safe even with the default key.
 const DEFAULT_BUYER_KEY =
   "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
 const BUYER_PRIVATE_KEY = process.env.BUYER_PRIVATE_KEY ?? DEFAULT_BUYER_KEY;
 
 const DRY_RUN = process.env.DRY_RUN !== "false"; // Default: dry run
 
-// Swap-input defaults — buyer's destination on a live deploy.
+// Build the query record from BUYER_INPUTS, omitting refundAddress when null.
 const SWAP_QUERY: Record<string, string> = {
-  destinationChain: process.env.SWAP_DESTINATION_CHAIN ?? "near",
-  destinationAsset:
-    process.env.SWAP_DESTINATION_ASSET ??
-    "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
-  destinationAddress: process.env.SWAP_DESTINATION_ADDRESS ?? "buyer.near",
-  amountIn: process.env.SWAP_AMOUNT_IN ?? "1000000", // 1 USDC (6 decimals)
+  destinationChain: BUYER_INPUTS.destinationChain,
+  destinationAsset: BUYER_INPUTS.destinationAsset,
+  destinationAddress: BUYER_INPUTS.destinationAddress,
+  amountIn: BUYER_INPUTS.amountIn,
 };
-if (process.env.SWAP_REFUND_ADDRESS) {
-  SWAP_QUERY.refundAddress = process.env.SWAP_REFUND_ADDRESS;
+if (BUYER_INPUTS.refundAddress) {
+  SWAP_QUERY.refundAddress = BUYER_INPUTS.refundAddress;
 }
 
 // ═══════════════════════════════════════════════════════════════════════

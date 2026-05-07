@@ -215,20 +215,17 @@ The 402 response carries a base64-encoded `PAYMENT-REQUIRED` header. Decode it t
 
 ### End-to-end with the test client
 
+The buyer's destination params (chain, asset, recipient, amount, optional refund address) live in a `BUYER_INPUTS` block at the top of [scripts/test-client.ts](scripts/test-client.ts) — edit them inline to match where you want funds to land. The `BUYER_PRIVATE_KEY` and `DRY_RUN` toggle stay as env vars (key out of source; run-mode is a CLI choice).
+
 ```bash
 # Dry run (no real payment, no funds needed) — prints the 402 envelope and stops
 npx tsx scripts/test-client.ts
 
-# Real payment (requires a funded buyer wallet)
+# Real payment (requires a funded buyer wallet on Base):
+#   1. Edit BUYER_INPUTS in scripts/test-client.ts to point at YOUR destination
+#      (the default destinationAddress is `buyer.near`, a placeholder — change it)
+#   2. Run with the buyer key in env:
 DRY_RUN=false BUYER_PRIVATE_KEY=0x... npx tsx scripts/test-client.ts
-
-# Custom destination
-SWAP_DESTINATION_CHAIN=arbitrum \
-SWAP_DESTINATION_ASSET=nep141:arb-0xaf88d065e77c8cc2239327c5edb3a432268e5831.omft.near \
-SWAP_DESTINATION_ADDRESS=0xYourArbAddress \
-SWAP_AMOUNT_IN=10000000 \
-DRY_RUN=false BUYER_PRIVATE_KEY=0x... \
-npx tsx scripts/test-client.ts
 ```
 
 The test client decodes the `PAYMENT-RESPONSE` header on success and prints the swap receipt: origin tx hash, destination tx hashes (with explorer URLs), realized slippage, operator fee, and the 1CS correlation ID.

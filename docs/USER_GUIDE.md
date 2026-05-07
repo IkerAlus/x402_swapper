@@ -316,20 +316,17 @@ The client handles all four protocol steps internally (request → decode → si
 
 ## CLI test client
 
-The repository includes `scripts/test-client.ts` for manual end-to-end testing.
+The repository includes `scripts/test-client.ts` for manual end-to-end testing. The buyer's destination params live in a `BUYER_INPUTS` block at the top of the file — edit them inline to point at the destination you want. The `BUYER_PRIVATE_KEY` and `DRY_RUN` toggle stay as env vars (key kept out of source; run-mode is a CLI choice).
+
+The default `BUYER_INPUTS` ships with `destinationChain: "near"`, `destinationAsset` = USDC on NEAR, `destinationAddress: "buyer.near"` (a placeholder — change before running with `DRY_RUN=false`), and `amountIn: "1000000"` (1 USDC). Inline comments list NEP-141 asset IDs for Arbitrum, Ethereum, Polygon, Optimism, Solana, and Stellar.
 
 ```bash
 # Dry run — no funds needed, prints the 402 envelope and stops
 npx tsx scripts/test-client.ts
 
-# Custom destination via env vars
-SWAP_DESTINATION_CHAIN=arbitrum \
-SWAP_DESTINATION_ASSET=nep141:arb-0xaf88d065e77c8cc2239327c5edb3a432268e5831.omft.near \
-SWAP_DESTINATION_ADDRESS=0xYourArbAddress \
-SWAP_AMOUNT_IN=10000000 \
-npx tsx scripts/test-client.ts
-
-# Real payment (requires funded buyer wallet on the origin chain)
+# Real payment:
+#   1. Edit BUYER_INPUTS in scripts/test-client.ts (especially destinationAddress)
+#   2. Run with the buyer key in env:
 DRY_RUN=false BUYER_PRIVATE_KEY=0x... npx tsx scripts/test-client.ts
 ```
 
