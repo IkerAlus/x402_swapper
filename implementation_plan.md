@@ -138,6 +138,8 @@ The git history retains the previous behavior. Keeping merchant-mode files in-tr
 
 The existing `.env.stellar` is a pre-filled merchant-mode config targeting Stellar. Rather than delete it, repurpose: rename to `.env.swap.example` and strip merchant fields, add comments showing how the buyer's request would supply Stellar destination params instead.
 
+> **Superseded (2026-05-07, post Phase 13):** `.env.swap.example` was deleted after the rewrite landed because it had become a near-duplicate of `.env.example` — the original `.env.stellar` justified its existence as a *chain-specific pre-fill* for the merchant predecessor; the swap-as-resource model has no chain-specific deploy config (the buyer supplies destination per-request), so the renamed file ended up covering the same env vars with the same defaults as `.env.example`. The buyer-query example block was merged into `.env.example`. Single source of truth.
+
 ### D12. Hard cutover for the SQLite database
 
 Pre-existing SQLite database files from a merchant-mode boot of this codebase are **not migrated**. The schema itself is unchanged — `state_json` already stores the full `SwapState` blob, so the new required `swapInputs` and `operatorMarginBps` fields round-trip for free. The cutover protection is a startup-time **fail-fast check**: if any existing row's `state_json` lacks `swapInputs`, the service refuses to boot and points the operator to `OPERATOR_GUIDE.md`'s "First boot" section. Operators delete `state.db` before first boot. Documented in `OPERATOR_GUIDE.md` and called out in `README.md`'s deploy section. Rationale: this is a fresh deploy of a different product; carrying migration scaffolding for a non-existent legacy is dead defensive code; failing loud at boot beats crashing mid-recovery on a dereference.
@@ -734,13 +736,12 @@ If all green: the swap service is shippable.
 | `src/swap-e2e.test.ts` | Multi-chain parametrized e2e tests |
 | `src/storage/store.swap.test.ts` | SQLite migration tests |
 | `docs/OPERATOR_GUIDE.md` | Operator regulatory + ops guide |
-| `.env.swap.example` | Renamed from `.env.stellar`; pre-filled swap-only config |
 
 ## Critical files (delete)
 
 | File | Reason |
 |---|---|
-| `.env.stellar` | Replaced by `.env.swap.example` |
+| `.env.stellar` | Merchant-predecessor Stellar pre-fill — superseded; the renamed `.env.swap.example` was itself deleted post-Phase 13 (see D11 supersession note); content is now in `.env.example` |
 | `docs/AGENTIC_MARKET_PLAN.md` | Marketing doc for the merchant predecessor (D13) |
 | `docs/POSITIONING.md` | Positioning doc for the merchant predecessor (D13) |
 | `docs/CODEBASE_AUDIT_2026-04-22.md` | Audit of the merchant predecessor (D13) |

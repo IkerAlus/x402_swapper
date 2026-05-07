@@ -72,7 +72,6 @@ x402_swapper/
 │   ├── Facilitator_keys_guidance.md  # Facilitator wallet key management
 │   └── X402SCAN_PLAN.md              # x402scan integration design notes (historical)
 ├── .env.example                      # Environment variable template
-├── .env.swap.example                 # Pre-filled config example with buyer query notes
 ├── implementation_plan.md            # Swap-mode pivot execution log
 ├── SWAP_AS_RESOURCE.md               # Original product brief
 ├── CLAUDE.local.md                   # AI agent onboarding guide
@@ -107,8 +106,6 @@ npm install @rollup/rollup-darwin-arm64 --save-optional
 
 ```bash
 cp .env.example .env
-# Or for a pre-annotated swap-service template:
-cp .env.swap.example .env
 ```
 
 ### Required fields
