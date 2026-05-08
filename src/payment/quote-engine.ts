@@ -147,11 +147,11 @@ export async function buildPaymentRequirements(
 
   validateDeadline(quoteResponse, cfg);
 
-  // ── 5. Apply operator margin ──────────────────────────────────────
-  const margin = applyOperatorMargin(amountIn, cfg.operatorMarginBps);
-
-  // ── 6. Map to x402 PaymentRequirements ────────────────────────────
-  const requirements = mapToPaymentRequirements(quoteResponse, cfg, inputs, margin);
+  // ── 5. Map to x402 PaymentRequirements ────────────────────────────
+  // No margin inflation here (D17 / Phase 14): the buyer signs for
+  // exactly `quote.amountIn`. The operator margin is collected via 1CS's
+  // `appFees` in the quote request (built by `buildSwapQuoteRequest`).
+  const requirements = mapToPaymentRequirements(quoteResponse, cfg, inputs);
 
   // ── 7. Persist SwapState ──────────────────────────────────────────
   const now = Date.now();
@@ -209,16 +209,26 @@ export function buildQuoteDeadline(cfg: GatewayConfig): string {
  * - `dry: false` — we need a real deposit address.
  * - `refundTo: inputs.refundAddress ?? cfg.gatewayRefundAddress` — buyer's
  *   per-request refund target wins; gateway address is the fallback (D6).
+ *   Pure failed-swap recovery path now (D18 / Phase 14): not used for
+ *   operator-fee collection.
  * - `depositType: ORIGIN_CHAIN` — the buyer deposits on the EVM origin chain.
  * - `recipientType: DESTINATION_CHAIN` — buyer receives on the destination chain
  *   they specified. (`INTENTS` would park funds inside NEAR Intents, which
  *   is not a use case for this product.)
+ * - `appFees` — when `cfg.operatorMarginBps > 0`, 1CS deducts this share of
+ *   the input and credits it to `cfg.operatorFeeRecipient`'s NEAR Intents
+ *   account (D15 / Phase 14). When bps is 0, omitted entirely.
  */
 export function buildSwapQuoteRequest(
   cfg: GatewayConfig,
   inputs: SwapRequestInput,
   deadline: string,
 ): Parameters<typeof OneClickService.getQuote>[0] {
+  const appFees =
+    cfg.operatorMarginBps > 0 && cfg.operatorFeeRecipient
+      ? [{ recipient: cfg.operatorFeeRecipient, fee: cfg.operatorMarginBps }]
+      : undefined;
+
   return {
     dry: false,
     swapType: QuoteRequest.swapType.EXACT_INPUT,
@@ -233,6 +243,7 @@ export function buildSwapQuoteRequest(
     recipientType: QuoteRequest.recipientType.DESTINATION_CHAIN,
     deadline,
     referral: ONECLICK_REFERRAL,
+    ...(appFees ? { appFees } : {}),
   };
 }
 
@@ -250,7 +261,7 @@ export function applyOperatorMargin(
   amountIn: string,
   bps: number,
 ): { amountWithMargin: string; marginAmount: string } {
-  if (bps < 0 || bps > 1000 || !Number.isInteger(bps)) {
+  if (bps < 0 || bps > 500 || !Number.isInteger(bps)) {
     throw new Error(`operatorMarginBps out of range: ${bps}`);
   }
   const base = BigInt(amountIn);
@@ -427,7 +438,9 @@ export function validateDeadline(quoteResponse: QuoteResponse, cfg: GatewayConfi
  * | scheme              | static                    | "exact" — standard EVM exact scheme                 |
  * | network             | cfg.originNetwork         | CAIP-2 chain ID (e.g. "eip155:8453")                |
  * | asset               | cfg.originTokenAddress    | ERC-20 contract address on origin chain             |
- * | amount              | quote.amountIn + margin   | EXACT_INPUT amountIn × (10000 + bps) / 10000        |
+ * | amount              | quote.amountIn            | EXACT_INPUT — buyer signs for exactly this. The     |
+ * |                     |                           | operator fee is collected via 1CS's `appFees`,      |
+ * |                     |                           | NOT by inflating the signed amount (D17).           |
  * | payTo               | quote.depositAddress      | 1CS deposit address (the foundational trick)        |
  * | maxTimeoutSeconds   | quote.deadline - now      | seconds until deadline, minus safety buffer         |
  * | extra.name          | cfg.tokenName             | EIP-712 domain name (e.g. "USD Coin")               |
@@ -440,7 +453,6 @@ export function mapToPaymentRequirements(
   quoteResponse: QuoteResponse,
   cfg: GatewayConfig,
   inputs: SwapRequestInput,
-  margin: { amountWithMargin: string; marginAmount: string },
 ): PaymentRequirementsRecord {
   const quote = quoteResponse.quote;
   const depositAddress = quote.depositAddress!;
@@ -455,20 +467,21 @@ export function mapToPaymentRequirements(
     scheme: "exact",
     network: cfg.originNetwork,
     asset: cfg.originTokenAddress,
-    // EXACT_INPUT semantics: the buyer signed for an exact `amountIn` in
-    // their request; we add the operator margin on top so the buyer's
-    // x402 authorisation covers (1CS amountIn + operator fee). Slippage
-    // upside on the destination amount accrues to the buyer.
-    amount: margin.amountWithMargin,
+    // EXACT_INPUT — buyer signs for exactly this amount. No margin
+    // inflation (D17 / Phase 14): the operator fee is collected via
+    // 1CS's `appFees`, deducted server-side from the swap.
+    amount: quote.amountIn,
     // The fundamental trick: payTo is the 1CS deposit address, not a merchant.
-    // Funds land here, 1CS routes them cross-chain to inputs.destinationAddress.
+    // Funds land here, 1CS routes them cross-chain to inputs.destinationAddress
+    // (minus the appFee, which 1CS credits to cfg.operatorFeeRecipient's
+    // NEAR Intents account).
     payTo: depositAddress,
     maxTimeoutSeconds,
     extra: {
       name: cfg.tokenName,
       version: cfg.tokenVersion,
       assetTransferMethod,
-      crossChain: buildCrossChainExtra(quoteResponse, cfg, inputs, margin),
+      crossChain: buildCrossChainExtra(quoteResponse, cfg, inputs),
     },
   };
 }
@@ -476,19 +489,24 @@ export function mapToPaymentRequirements(
 /**
  * Build the informational `extra.crossChain` block carried on every 402
  * envelope. Surfaces the buyer's destination, the 1CS quote breakdown,
- * the operator margin, and the effective refund target.
+ * the operator fee, and the effective refund target.
  *
- * Keys that the 1CS quote does not populate (e.g. `refundFee`,
- * `depositMemo` — both chain-dependent) are omitted from the output
- * rather than emitted as `undefined`, so serialised JSON stays tight.
+ * The `operatorFee.amount` is computed locally via {@link applyOperatorMargin}
+ * (same math 1CS will apply via `appFees` server-side) — this is purely a
+ * transparency aid for the buyer. Keys that the 1CS quote does not populate
+ * (e.g. `refundFee`, `depositMemo` — chain-dependent) are omitted rather
+ * than emitted as `undefined`.
  */
 function buildCrossChainExtra(
   quoteResponse: QuoteResponse,
   cfg: GatewayConfig,
   inputs: SwapRequestInput,
-  margin: { marginAmount: string },
 ): CrossChainQuoteExtra {
   const quote = quoteResponse.quote;
+  // Compute the operator-fee amount locally for the buyer's transparency
+  // surface — same math 1CS applies via `appFees` server-side.
+  const { marginAmount } = applyOperatorMargin(quote.amountIn, cfg.operatorMarginBps);
+
   const out: CrossChainQuoteExtra = {
     protocol: "1cs",
     quoteId: quoteResponse.correlationId,
@@ -501,7 +519,7 @@ function buildCrossChainExtra(
     refundTo: inputs.refundAddress ?? cfg.gatewayRefundAddress,
     operatorFee: {
       bps: cfg.operatorMarginBps,
-      amount: margin.marginAmount,
+      amount: marginAmount,
       currency: "USDC",
     },
   };

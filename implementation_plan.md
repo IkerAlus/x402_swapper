@@ -821,3 +821,190 @@ Total: **~21–25 hours** (3 focused workdays). Larger than the 13–18 hour sib
 - Touch the ownership-proof / x402scan registration flow. Same operator key, same proof, just a single swap route to advertise.
 - Modify `defaultQuoteFn`. Same SDK call; only the request shape differs.
 - Auto-rename the npm package or repo.
+
+---
+
+# Phase 14 — Fix the operator-fee mechanism (use 1CS `appFees`)
+
+> **Status: Planned — 2026-05-07.** The fee architecture from Phases 1–13 is broken in the typical case: when the buyer supplies `refundAddress` (the recommended path), the operator earns nothing. This phase rebuilds the fee path on top of 1CS's first-class `appFees` mechanism.
+
+## Context — what's wrong with the current implementation
+
+The shipped flow ([src/payment/quote-engine.ts](src/payment/quote-engine.ts)):
+
+1. Quote engine calls 1CS with `amount: inputs.amountIn` (e.g. 1.000 USDC) and `refundTo: inputs.refundAddress ?? cfg.gatewayRefundAddress`.
+2. `applyOperatorMargin` inflates the buyer's signed amount to `amountIn × (1 + bps/10000)` (e.g. 1.003 USDC for 30 bps).
+3. Buyer's EIP-3009 deposits 1.003 USDC at the 1CS deposit address.
+4. 1CS sees deposit > the requested `amount` and, per EXACT_INPUT semantics, **swaps `amountIn` and refunds the excess to `refundTo`**.
+
+The excess (`marginAmount` = 0.003 USDC) is the operator's intended fee — but `refundTo` is the buyer's address (or the gateway fallback), so:
+
+- **Buyer supplies `refundAddress` (recommended):** margin refunds back to the buyer. Operator earns $0.
+- **Buyer omits `refundAddress`:** margin lands at `cfg.gatewayRefundAddress`. Operator earns the margin — but failed-swap refunds also land there, requiring manual operator forwarding (which D6 was specifically trying to avoid).
+
+The two refund destinations ("excess overpayment" and "failed swap") share a single `refundTo` field in 1CS, which makes the inflate-the-signed-amount approach inherently incompatible with buyer-friendly refunds.
+
+## Root cause and fix architecture
+
+1CS supports **`appFees`** in `QuoteRequest` exactly for this:
+
+```ts
+type AppFee = {
+  recipient: string;  // NEAR Intents account ID (the operator's payout account)
+  fee: number;        // basis points; e.g. 30 = 0.3% of amountIn
+};
+```
+
+When `appFees` is present, 1CS:
+- Treats `amount` as the buyer's full input (e.g. 1.000 USDC).
+- Routes `amountIn × (1 - sumOfFees/10000)` through the swap — the buyer's destination receives this minus the 1CS spread.
+- Credits `amountIn × fee/10000` to each recipient's NEAR Intents account, denominated in the **origin asset** (e.g. nep141:base-…USDC.omft.near).
+
+The operator accrues fees in their Intents account. They withdraw out-of-band (a separate 1CS withdrawal flow, periodic batch, etc.) — not the gateway's responsibility.
+
+**With this, the buyer signs for exactly `inputs.amountIn`** (no inflation), and `refundTo` becomes purely the failed-swap recovery path — exactly what D6 originally intended.
+
+## Design decisions
+
+### D15. Use 1CS `appFees` for the operator margin
+
+The buyer's x402 amount equals `inputs.amountIn`. The operator margin is collected via 1CS's `appFees` — the gateway never inflates the buyer's signed transfer.
+
+### D16. Operator fee recipient is a service-level config (`OPERATOR_FEE_RECIPIENT`)
+
+A NEAR Intents account ID. Service-level (not per-route) since this is single-product. **Required when `OPERATOR_MARGIN_BPS > 0`** (Zod refinement); optional when bps is 0.
+
+The recipient is a **NEAR account format string** — accepts named (`operator.near`), `.tg`, or 64-char implicit hex. Same validation rules as `isValidNearAccount` from `chain-prefixes.ts`. EVM-format addresses are not valid Intents accounts and are rejected at config-load time.
+
+### D17. Buyer's signed amount = `inputs.amountIn` (no margin inflation)
+
+The whole point. `applyOperatorMargin`'s role shrinks: it still computes the *amount* of fee for the receipt (and for `extra.crossChain.operatorFee.amount`), but no longer inflates the signed amount. `mapToPaymentRequirements.amount` is `quoteResponse.quote.amountIn`, not `amountWithMargin`.
+
+### D18. `refundTo` becomes purely failed-swap recovery
+
+With the fee out of the refund path, `refundTo: inputs.refundAddress ?? cfg.gatewayRefundAddress` works as D6 originally intended: buyer-supplied refund address means failed-swap refunds go directly to the buyer; gateway address is fallback. No conflict between fee mechanism and refund mechanism.
+
+### D19. Receipt's `operatorFee.amount` reflects what 1CS actually deducted
+
+The receipt's `operatorFee.amount` should be sourced from 1CS's `swapDetails` post-swap if 1CS reports it; otherwise computed from `state.operatorMarginBps × state.quoteResponse.quote.amountIn / 10000`. The `currency` stays `"USDC"` (the origin asset; the operator's Intents balance is denominated in this).
+
+### D20. Currency clarification on `operatorFee.currency`
+
+The fee is paid in the **origin asset**, credited to the operator's NEAR Intents account. The `currency` field has historically been `"USDC"` — accurate for a Base-USDC origin, would change for other origins. Future-proof by deriving from `cfg.originAssetIn` instead of hardcoding (extract a chain-aware label, e.g. `"USDC (origin)"`). Out of scope for this phase if it's only ever Base USDC; flag in `OPERATOR_GUIDE.md`.
+
+## Implementation phases
+
+### Phase 14a — Config
+
+**File: [src/infra/config.ts](src/infra/config.ts)**
+
+Add `operatorFeeRecipient`:
+```ts
+operatorFeeRecipient: z.string().optional(),
+```
+
+Add a Zod `.refine()` at the schema level: when `operatorMarginBps > 0`, `operatorFeeRecipient` must be present AND must pass `isValidNearAccount`. When bps is 0, recipient is optional and ignored.
+
+**File: [.env.example](.env.example)**
+
+Add an `OPERATOR_FEE_RECIPIENT` block near `OPERATOR_MARGIN_BPS`, with explanation: "NEAR Intents account that receives the operator margin. Required when `OPERATOR_MARGIN_BPS > 0`. Format: NEAR account name (e.g. `operator.near`), `.tg` account, or 64-char implicit hex. The fee accrues here in the origin asset (USDC on Base via NEP-141 bridge); withdraw periodically via 1CS."
+
+### Phase 14b — Quote engine
+
+**File: [src/payment/quote-engine.ts](src/payment/quote-engine.ts)**
+
+1. `buildSwapQuoteRequest` — add `appFees` when `cfg.operatorMarginBps > 0`:
+```ts
+const appFees = cfg.operatorMarginBps > 0
+  ? [{ recipient: cfg.operatorFeeRecipient!, fee: cfg.operatorMarginBps }]
+  : undefined;
+return {
+  // ...existing fields...
+  amount: inputs.amountIn,
+  appFees,
+};
+```
+
+2. `buildPaymentRequirements` — drop the `amountWithMargin` inflation step:
+```ts
+// REMOVE this block
+const margin = applyOperatorMargin(amountIn, cfg.operatorMarginBps);
+const requirements = mapToPaymentRequirements(quoteResponse, cfg, inputs, margin);
+```
+Replace with a direct call:
+```ts
+const requirements = mapToPaymentRequirements(quoteResponse, cfg, inputs);
+```
+
+3. `mapToPaymentRequirements(quoteResponse, cfg, inputs)` — drop the `margin` parameter; set `amount: quoteResponse.quote.amountIn`. Keep `extra.crossChain.operatorFee` populated, sourcing the amount from `applyOperatorMargin(quote.amountIn, cfg.operatorMarginBps).marginAmount` (still useful as a pure helper for the fee math; just no longer used to inflate the signed amount).
+
+4. Keep `applyOperatorMargin` exported (for the receipt builder). Its purpose narrows from "inflate the signed amount" to "compute the fee amount for transparency".
+
+### Phase 14c — Settler
+
+**File: [src/payment/settler.ts](src/payment/settler.ts)**
+
+`buildCrossChainSettlementExtra` already computes the operator fee from `state.operatorMarginBps × state.quoteResponse.quote.amountIn`. No structural change needed — the math is correct under D17. Verify it still produces the right amount when reading from the post-D17 quote response (which now reflects 1CS's appFee deduction in `amountOut`).
+
+If 1CS surfaces the realized appFee amount in `swapDetails` (need to confirm against the SDK), prefer that over the recomputed value.
+
+### Phase 14d — Tests
+
+**Update** ([src/payment/quote-engine.test.ts](src/payment/quote-engine.test.ts)):
+- "buildSwapQuoteRequest" — add `appFees` assertion when `operatorMarginBps > 0`; assert `appFees` is `undefined` when bps is 0.
+- "mapToPaymentRequirements" — assert `amount === quote.amountIn` (NOT inflated). Drop the existing "uses amountWithMargin" assertion.
+- "buildPaymentRequirements happy path" — assert the persisted state's `paymentRequirements.amount === inputs.amountIn`.
+- Add: "rejects config when `OPERATOR_MARGIN_BPS > 0` but `OPERATOR_FEE_RECIPIENT` is missing" (config.test.ts).
+- Add: "rejects config when `OPERATOR_FEE_RECIPIENT` is not a valid NEAR account" (config.test.ts).
+
+**Update** ([src/mocks/mock-config.ts](src/mocks/mock-config.ts)):
+- `mockGatewayConfig` adds `operatorFeeRecipient: "operator.near"` (default, used whenever `operatorMarginBps > 0` in tests).
+
+**Update** ([src/mocks/mock-1cs-responses.ts](src/mocks/mock-1cs-responses.ts)):
+- `mockQuoteResponse` no longer needs to include `amountIn` inflation logic (it already echoes `inputs.amountIn`, so this is fine). The test's expected `amountOut` may shift slightly — adjust to a post-fee value (e.g. `9970000` if buyer signs for 10M with 30 bps fee).
+
+### Phase 14e — Live verification
+
+**File: [src/live-1cs.test.ts](src/live-1cs.test.ts)** — add one test that submits a real EXACT_INPUT quote with `appFees: [{recipient: "test.near", fee: 30}]` and asserts the response's `quote.amountOut` is meaningfully smaller than a quote with no appFees (delta ≈ 0.3% of `amountIn`).
+
+### Phase 14f — Documentation
+
+- **README.md** — update the "Operator Margin" subsection: describe how the fee is collected (1CS appFees, accrues to NEAR Intents account); add "operator must set up a NEAR Intents account before booting with `OPERATOR_MARGIN_BPS > 0`".
+- **docs/OPERATOR_GUIDE.md** — add a "Collecting your operator fee" section: how to set up a NEAR Intents account, how to withdraw from it (link to 1CS withdrawal flow), expected balance accumulation pattern, currency clarification (D20), and an explicit note that the fee is in the origin asset's denomination so multi-origin support (out of scope for now) would require multiple recipients.
+- **docs/USER_GUIDE.md** — the buyer-facing description of `extra.crossChain.operatorFee` should still say "transparent fee included on top of the 1CS quote." From the buyer's perspective nothing changes — they pay `amountIn`, receive slightly less on the destination than a no-margin quote would have produced.
+- **CLAUDE.local.md** — update the "Operator margin (basis points)" subsection in "Key Design Patterns" to reflect the appFees mechanism.
+
+## Critical files (modify)
+
+| File | Change |
+|---|---|
+| `src/infra/config.ts` | Add `operatorFeeRecipient`; Zod refinement requiring it when `operatorMarginBps > 0` |
+| `src/payment/quote-engine.ts` | `buildSwapQuoteRequest` adds `appFees`; `mapToPaymentRequirements` drops margin inflation; `buildPaymentRequirements` no longer pre-computes margin for the signed amount |
+| `src/mocks/mock-config.ts` | Add `operatorFeeRecipient` default |
+| `src/payment/quote-engine.test.ts` | Update assertions per D17 |
+| `src/infra/config.test.ts` | Add Zod-refinement tests |
+| `.env.example` | Document `OPERATOR_FEE_RECIPIENT` |
+| `README.md`, `CLAUDE.local.md`, `docs/USER_GUIDE.md`, `docs/OPERATOR_GUIDE.md` | Update the operator-fee narrative |
+
+## Risks & open questions
+
+1. **`AppFee.recipient` accepted formats**. The SDK type says "Account ID within Intents". Need to confirm via a live quote test whether 1CS accepts: named NEAR accounts (`foo.near`), `.tg` accounts, 64-char implicit hex, EVM-derived implicit accounts. Plan for this is the live test in Phase 14e.
+
+2. **Where does the fee actually pay out?** Confirmed via SDK comment: "Account ID within Intents" — so it's an Intents-internal credit. Document in `OPERATOR_GUIDE.md` how the operator withdraws to mainnet.
+
+3. **`swapDetails` post-fee amount**. Need to confirm whether 1CS's status response surfaces the realized appFee amount (so the receipt can show what was actually collected vs. what was quoted). If not, we recompute from `bps × amountIn` — within 1 unit precision either way for stablecoins.
+
+4. **Migration**: any in-flight swaps in a SQLite DB from the pre-D17 era will have `paymentRequirements.amount = amountWithMargin`. After D17 ships, the recovery path needs to handle these correctly — the buyer signed for the inflated amount, the deposit address has the inflated amount, and 1CS will refund the excess to `refundTo` (the old behavior). Two options: (a) the D12 stale-DB check refuses to boot on the old format too (forcing a clean DB on upgrade), or (b) the receipt builder reads `paymentRequirements.amount` (not `quote.amountIn × (1 + bps)`) so it remains correct for legacy rows. **Recommend (a)** — it's simpler and we already have the D12 mechanism. Document the upgrade path in `OPERATOR_GUIDE.md`.
+
+5. **`OPERATOR_MARGIN_BPS = 0` deployments**. With bps = 0, `appFees` is `undefined`, no fee is collected, no recipient required. Verify this path works end-to-end in tests.
+
+## Effort estimate
+
+- Phase 14a (config): ~30 min
+- Phase 14b (quote engine): ~1 hour
+- Phase 14c (settler verification): ~15 min
+- Phase 14d (tests): ~2 hours
+- Phase 14e (live test): ~30 min
+- Phase 14f (docs): ~1 hour
+
+Total: **~5 hours.**

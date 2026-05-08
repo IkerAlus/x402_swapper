@@ -211,9 +211,10 @@ describe("applyOperatorMargin", () => {
     expect(result.amountWithMargin).toBe("1003000000000000000");
   });
 
-  it("throws on out-of-range bps (negative, >1000, or non-integer)", () => {
+  it("throws on out-of-range bps (negative, >500 1CS appFees ceiling, or non-integer)", () => {
     expect(() => applyOperatorMargin("10000000", -1)).toThrow(/out of range/);
-    expect(() => applyOperatorMargin("10000000", 1001)).toThrow(/out of range/);
+    expect(() => applyOperatorMargin("10000000", 501)).toThrow(/out of range/);
+    expect(() => applyOperatorMargin("10000000", 1000)).toThrow(/out of range/);
     expect(() => applyOperatorMargin("10000000", 30.5)).toThrow(/out of range/);
   });
 });
@@ -280,64 +281,94 @@ describe("validateDeadline", () => {
 // ═══════════════════════════════════════════════════════════════════════
 
 describe("mapToPaymentRequirements", () => {
-  it("uses amountWithMargin as x402 amount and the deposit address as payTo", () => {
-    // The two foot-guns: forgetting the margin (operator earns nothing) or
-    // forgetting payTo = deposit address (the trick that makes the gateway work).
+  it("uses quote.amountIn (no margin inflation, D17) as x402 amount and the deposit address as payTo", () => {
+    // The two foot-guns post-Phase 14: inflating the buyer's signed amount
+    // (broken — see D17) or forgetting payTo = deposit address. Buyer signs
+    // for the raw 1CS-quoted amountIn; the operator fee is collected via 1CS
+    // appFees, not via inflating the buyer's authorisation.
     const cfg = testConfig({ operatorMarginBps: 30 });
     const response = mockQuoteResponse();
-    const margin = applyOperatorMargin(response.quote.amountIn, cfg.operatorMarginBps);
 
-    const req = mapToPaymentRequirements(response, cfg, testInputs(), margin);
+    const req = mapToPaymentRequirements(response, cfg, testInputs());
 
-    expect(req.amount).toBe(margin.amountWithMargin);
-    expect(req.amount).toBe("10030000"); // 10M + 0.3%
+    expect(req.amount).toBe(response.quote.amountIn);
+    expect(req.amount).toBe("10000000"); // EXACTLY 10 USDC — no inflation
     expect(req.payTo).toBe(response.quote.depositAddress);
     expect(req.scheme).toBe("exact");
     expect(req.network).toBe(cfg.originNetwork);
   });
 
-  it("populates extra.crossChain with operatorFee, destinationRecipient, destinationAsset, and refundTo (buyer wins)", () => {
+  it("populates extra.crossChain with operatorFee (transparent breakdown), destinationRecipient, destinationAsset, and refundTo (buyer wins)", () => {
     const cfg = testConfig({
       operatorMarginBps: 50,
       gatewayRefundAddress: "0xfacefacefacefacefacefacefacefacefaceface",
     });
     const response = mockQuoteResponse();
-    const margin = applyOperatorMargin(response.quote.amountIn, cfg.operatorMarginBps);
+    // The fee shown in extra.crossChain is the transparent breakdown for
+    // the buyer — same math 1CS applies via appFees server-side.
+    const expectedMargin = applyOperatorMargin(response.quote.amountIn, cfg.operatorMarginBps);
 
-    // Buyer-supplied refundAddress wins.
+    // Buyer-supplied refundAddress wins for the failed-swap recovery path (D18).
     const inputs = testInputs({
       ...DESTINATION_PRESETS.arbitrum,
       refundAddress: "0xbeefbeefbeefbeefbeefbeefbeefbeefbeefbeef",
     });
-    const cross = mapToPaymentRequirements(response, cfg, inputs, margin).extra.crossChain as {
+    const cross = mapToPaymentRequirements(response, cfg, inputs).extra.crossChain as {
       operatorFee: { bps: number; amount: string; currency: string };
       destinationRecipient: string;
       destinationAsset: string;
       refundTo: string;
     };
 
-    expect(cross.operatorFee).toEqual({ bps: 50, amount: margin.marginAmount, currency: "USDC" });
+    expect(cross.operatorFee).toEqual({ bps: 50, amount: expectedMargin.marginAmount, currency: "USDC" });
     expect(cross.destinationRecipient).toBe(inputs.destinationAddress);
     expect(cross.destinationAsset).toBe(inputs.destinationAsset);
     expect(cross.refundTo).toBe(inputs.refundAddress);
 
     // Buyer omits refundAddress → falls back to gateway address.
-    const noRefund = mapToPaymentRequirements(response, cfg, testInputs(), margin).extra.crossChain as { refundTo: string };
+    const noRefund = mapToPaymentRequirements(response, cfg, testInputs()).extra.crossChain as { refundTo: string };
     expect(noRefund.refundTo).toBe(cfg.gatewayRefundAddress);
   });
 
   it("threads tokenSupportsEip3009 into extra.assetTransferMethod (eip3009 vs permit2)", () => {
     const response = mockQuoteResponse();
-    const margin = applyOperatorMargin(response.quote.amountIn, 30);
 
     expect(
-      mapToPaymentRequirements(response, testConfig({ tokenSupportsEip3009: true }), testInputs(), margin).extra
+      mapToPaymentRequirements(response, testConfig({ tokenSupportsEip3009: true }), testInputs()).extra
         .assetTransferMethod,
     ).toBe("eip3009");
     expect(
-      mapToPaymentRequirements(response, testConfig({ tokenSupportsEip3009: false }), testInputs(), margin).extra
+      mapToPaymentRequirements(response, testConfig({ tokenSupportsEip3009: false }), testInputs()).extra
         .assetTransferMethod,
     ).toBe("permit2");
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// buildSwapQuoteRequest — appFees (D15)
+// ═══════════════════════════════════════════════════════════════════════
+
+describe("buildSwapQuoteRequest — appFees (D15)", () => {
+  it("includes appFees with the operator's recipient + bps when operatorMarginBps > 0", () => {
+    const cfg = testConfig({
+      operatorMarginBps: 30,
+      operatorFeeRecipient: "operator.near",
+    });
+    const req = buildSwapQuoteRequest(cfg, testInputs(), "2026-01-01T00:00:00Z");
+    expect(req.appFees).toEqual([{ recipient: "operator.near", fee: 30 }]);
+  });
+
+  it("omits appFees entirely when operatorMarginBps = 0 (free deployment)", () => {
+    const cfg = testConfig({ operatorMarginBps: 0, operatorFeeRecipient: undefined });
+    const req = buildSwapQuoteRequest(cfg, testInputs(), "2026-01-01T00:00:00Z");
+    expect(req.appFees).toBeUndefined();
+  });
+
+  it("does not inflate `amount` — buyer signs for exactly inputs.amountIn (D17)", () => {
+    const cfg = testConfig({ operatorMarginBps: 100 }); // 1% margin
+    const inputs = testInputs({ amountIn: "5000000" });
+    const req = buildSwapQuoteRequest(cfg, inputs, "2026-01-01T00:00:00Z");
+    expect(req.amount).toBe("5000000"); // unchanged — fee comes via appFees
   });
 });
 

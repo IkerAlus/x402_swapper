@@ -22,7 +22,7 @@ Any wallet that can sign EIP-712 typed data: MetaMask, Rabby, Coinbase Wallet, o
 
 **2. USDC on Base** (the origin asset)
 
-The gateway accepts USDC at `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` on the Base L2. You need enough USDC to cover your `amountIn` plus the operator's margin (typically 30 bps = 0.3%). For example, paying `10000000` (10 USDC) at `OPERATOR_MARGIN_BPS=30` requires you to authorize `10030000` (10.03 USDC).
+The gateway accepts USDC at `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` on the Base L2. You need enough USDC to cover your `amountIn`. For example, paying `10000000` (10 USDC) means you authorize exactly `10000000`. The operator fee (typically 30 bps = 0.3%) is deducted from the swap output by 1CS — you sign for `amountIn` and receive a destination amount that has the operator fee already netted out.
 
 How to get USDC on Base:
 - Bridge from Ethereum mainnet via [bridge.base.org](https://bridge.base.org)
@@ -105,7 +105,7 @@ The `PAYMENT-REQUIRED` header is a base64-encoded JSON envelope:
       "scheme": "exact",
       "network": "eip155:8453",
       "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-      "amount": "10030000",
+      "amount": "10000000",
       "payTo": "0x7a16fF8270133F063aAb6C9977183D9e72835428",
       "maxTimeoutSeconds": 86370,
       "extra": {
@@ -117,10 +117,10 @@ The `PAYMENT-REQUIRED` header is a base64-encoded JSON envelope:
           "quoteId": "corr-a1b2c3d4-...",
           "destinationRecipient": "alice.near",
           "destinationAsset": "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
-          "amountOut": "9985000",
-          "amountOutFormatted": "9.985",
-          "amountOutUsd": "9.99",
-          "amountInUsd": "10.03",
+          "amountOut": "9955000",
+          "amountOutFormatted": "9.955",
+          "amountOutUsd": "9.96",
+          "amountInUsd": "10.00",
           "refundTo": "0x...",
           "operatorFee": { "bps": 30, "amount": "30000", "currency": "USDC" }
         }
@@ -132,7 +132,7 @@ The `PAYMENT-REQUIRED` header is a base64-encoded JSON envelope:
 
 #### Fields you'll use to sign
 
-- **`amount`** — exactly what you authorize, in the token's smallest unit. **This is your `amountIn` plus the operator margin** (30 bps default).
+- **`amount`** — exactly what you authorize, in the token's smallest unit. **This is exactly your `amountIn`** — the operator fee (if any) is deducted from the swap output, not added on top.
 - **`payTo`** — the unique 1CS deposit address generated for *this* quote. Funds you authorize will go here on Base; 1CS detects the deposit and routes them cross-chain.
 - **`network`** — CAIP-2 chain ID (`eip155:8453` = Base mainnet).
 - **`asset`** — the ERC-20 token contract (USDC on Base).
@@ -152,9 +152,9 @@ const cross = accepted.extra.crossChain as
       destinationRecipient: string;        // your destination address (echoed)
       destinationAsset: string;            // the asset you'll receive
       amountOut: string;                   // expected destination amount (smallest unit)
-      amountOutFormatted: string;          // human-readable (e.g. "9.985")
-      amountOutUsd: string;                // USD value of what you'll receive
-      amountInUsd: string;                 // USD value of what you'll pay (incl. margin)
+      amountOutFormatted: string;          // human-readable (e.g. "9.955")
+      amountOutUsd: string;                // USD value of what you'll receive (operator fee already deducted)
+      amountInUsd: string;                 // USD value of what you'll pay (= amountIn, no margin added on top)
       refundFee?: string;                  // optional — chain-dependent
       refundTo: string;                    // your refundAddress, or the gateway fallback
       depositMemo?: string;                // optional — required by Stellar/XRP/Cosmos
@@ -189,7 +189,7 @@ Domain:
 Message (TransferWithAuthorization):
   from:        your wallet address
   to:          the payTo address          ← the 1CS deposit address
-  value:       the amount                 ← amountIn + operator margin
+  value:       the amount                 ← exactly amountIn (no margin inflation)
   validAfter:  0                          ← immediately valid
   validBefore: now + maxTimeoutSeconds    ← expiration (unix seconds)
   nonce:       random 32-byte hex         ← unique per authorization
@@ -207,7 +207,7 @@ Then construct the `PAYMENT-SIGNATURE` payload:
     "authorization": {
       "from": "0xYourAddress",
       "to": "0x7a16fF82...",
-      "value": "10030000",
+      "value": "10000000",
       "validAfter": "0",
       "validBefore": "1762800000",
       "nonce": "0x..."
@@ -251,7 +251,7 @@ The `PAYMENT-RESPONSE` header is a base64-encoded JSON `SettleResponse`. The swa
   "payer": "0xYourAddress",
   "transaction": "0xBaseTxHash...",
   "network": "eip155:8453",
-  "amount": "10030000",
+  "amount": "10000000",
   "extensions": {
     "crossChain": {
       "settlementType": "crosschain-1cs",
@@ -261,9 +261,9 @@ The `PAYMENT-RESPONSE` header is a base64-encoded JSON `SettleResponse`. The swa
       "destinationChain": "near",
       "destinationRecipient": "alice.near",
       "destinationAsset": "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
-      "destinationAmount": "9985000",
-      "destinationAmountFormatted": "9.985",
-      "destinationAmountUsd": "9.99",
+      "destinationAmount": "9955000",
+      "destinationAmountFormatted": "9.955",
+      "destinationAmountUsd": "9.96",
       "slippage": 0.0015,
       "operatorFee": { "bps": 30, "amount": "30000", "currency": "USDC" },
       "swapStatus": "SUCCESS",

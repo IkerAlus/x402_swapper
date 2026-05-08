@@ -150,9 +150,9 @@ export const CROSS_CHAIN_QUOTE_SCHEMA: Readonly<Record<string, unknown>> =
         type: "object",
         required: ["bps", "amount", "currency"],
         description:
-          "Operator margin charged on top of the 1CS-quoted `amountIn`. Surfaced transparently so the buyer can see exactly what they're paying.",
+          "Operator fee deducted from the swap by 1CS via `appFees`. Surfaced transparently so the buyer can see exactly what they're paying.",
         properties: {
-          bps: { type: "integer", minimum: 0, maximum: 1000 },
+          bps: { type: "integer", minimum: 0, maximum: 500 },
           amount: {
             type: "string",
             description: "Margin amount in the origin asset's smallest unit.",
@@ -234,7 +234,7 @@ export const CROSS_CHAIN_SETTLEMENT_SCHEMA: Readonly<Record<string, unknown>> =
         required: ["bps", "amount", "currency"],
         description: "Operator margin breakdown — same shape as the 402 envelope's operatorFee.",
         properties: {
-          bps: { type: "integer", minimum: 0, maximum: 1000 },
+          bps: { type: "integer", minimum: 0, maximum: 500 },
           amount: { type: "string" },
           currency: { type: "string" },
         },

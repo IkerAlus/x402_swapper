@@ -53,7 +53,8 @@ const BUYER_INPUTS = {
   destinationAsset:
     "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
   // EVM examples (uncomment + adjust to match `destinationChain`):
-  //   "nep141:arb-0xaf88d065e77c8cc2239327c5edb3a432268e5831.omft.near"   // USDC on Arbitrum
+  //   "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1", // USDT on Near
+  //  "nep141:arb-0xaf88d065e77c8cc2239327c5edb3a432268e5831.omft.near"   // USDC on Arbitrum
   //   "nep141:eth-0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48.omft.near"   // USDC on Ethereum
   //   "nep141:polygon-0x3c499c542cef5e3811e1192ce70d8cc03d5c3359.omft.near" // USDC on Polygon
   //   "nep141:op-0x0b2c639c533813f4aa9d7837caf62653d097ff85.omft.near"   // USDC on Optimism
@@ -65,7 +66,7 @@ const BUYER_INPUTS = {
   destinationAddress: "ikeralus.near", // ← REPLACE with an account YOU control
 
   /** Origin amount the buyer pays, in USDC smallest unit (6 decimals on Base). */
-  amountIn: "10000", // 1 USDC
+  amountIn: "75000", // 
 
   /**
    * Optional: refund target if 1CS fails the swap. Strongly recommended —

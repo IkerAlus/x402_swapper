@@ -93,17 +93,42 @@ x402 clients that surface this to the buyer (the included `X402Client` doesn't y
 
 ## Operator margin
 
-`OPERATOR_MARGIN_BPS` (basis points) is your knob — the margin added on top of the 1CS-quoted `amountIn`. Range `0`–`1000` (0% to 10%).
+`OPERATOR_MARGIN_BPS` (basis points) is your knob — the operator fee taken on every swap. Range `0`–`500` (0% to 5%). 1CS rejects appFees above 500 bps with a 400 ("Total fee is N basis points, which exceeds 5% (500)"), so the gateway caps here at startup to fail fast rather than at first quote.
 
-The buyer signs an EIP-3009 authorization for `amountIn × (10000 + bps) / 10000`. The 1CS portion goes to the deposit address (and onward to the buyer's destination); the margin lands at the deposit address too, but 1CS routes only the original `amountIn` worth of value, so the difference is the operator's revenue on the origin side.
+**How the fee is collected**: 1CS deducts the fee from the swap via its `appFees` mechanism. The gateway includes `appFees: [{ recipient: OPERATOR_FEE_RECIPIENT, fee: OPERATOR_MARGIN_BPS }]` on every quote request. The buyer signs an EIP-3009 authorization for **exactly `amountIn`** — no inflation. 1CS then routes the swap such that:
+
+1. The buyer's destination receives `amountOut` (the post-fee swap output).
+2. `OPERATOR_FEE_RECIPIENT`'s NEAR Intents account is credited with the fee in the **origin asset's NEP-141 representation** (e.g. `nep141:base-...USDC.omft.near` for USDC on Base).
+
+This is fundamentally different from the merchant-mode predecessor: there, the operator received funds at a wallet address; here, the operator's fee accrues on **NEAR Intents** as a 1CS internal credit, withdrawn out-of-band via 1CS (see "Collecting your operator fee" below).
+
+**Required env var**: `OPERATOR_FEE_RECIPIENT` is required when `OPERATOR_MARGIN_BPS > 0`. Format: NEAR named account (`treasury.near`, `foo.tg`) or 64-char implicit hex. **EVM addresses are not Intents accounts** and are rejected at startup. The Zod validator in `src/infra/config.ts` cross-checks via `isValidNearAccount`.
 
 **Picking a value**: typical bridge fees are 5–30 bps for stablecoin-to-stablecoin transfers, higher (50–100 bps) for volatile pairs or smaller chains. Your default is `30` (0.3%). Considerations:
 
-- **Free service (`OPERATOR_MARGIN_BPS=0`)** is allowed — useful for ecosystem onboarding endpoints where the swap is loss-leader. Receipt then shows `operatorFee.amount: "0"`.
-- **Transparent**: the margin is surfaced in `extra.crossChain.operatorFee` on every 402 envelope and in the settlement receipt. Buyers see exactly what they're paying.
+- **Free service (`OPERATOR_MARGIN_BPS=0`)** is allowed — useful for ecosystem onboarding endpoints where the swap is loss-leader. The gateway then omits `appFees` from the 1CS quote entirely (no zero-fee artifact on the quote side), and the receipt shows `operatorFee.amount: "0"`. `OPERATOR_FEE_RECIPIENT` may be unset in this case.
+- **Transparent**: the fee is surfaced in `extra.crossChain.operatorFee` on every 402 envelope and in the settlement receipt. Buyers see exactly what they're paying.
 - **Service-level, not per-route**: with one route in the registry, this is moot. If you ever add a "fast" lane vs "cheap" lane, [src/http/protected-routes.ts](../src/http/protected-routes.ts)'s `pricing` field would need a per-route margin override (small refactor).
 
-**Margin economics** are independent of slippage. Slippage is what 1CS reports as `swapDetails.slippage` post-settlement (the difference between the quoted `amountOut` and what was actually delivered). With EXACT_INPUT, slippage upside *and* downside lands on the buyer — your margin is fixed regardless. See [SWAP_AS_RESOURCE.md § 5](../SWAP_AS_RESOURCE.md) for the full discussion.
+**Margin economics** are independent of slippage. Slippage is what 1CS reports as `swapDetails.slippage` post-settlement (the difference between the quoted `amountOut` and what was actually delivered). With EXACT_INPUT, slippage upside *and* downside lands on the buyer — your operator fee is fixed regardless (it's deducted by 1CS before the swap output is computed). See [SWAP_AS_RESOURCE.md § 5](../SWAP_AS_RESOURCE.md) for the full discussion.
+
+---
+
+## Collecting your operator fee
+
+Your fee accrues on a **NEAR Intents account** (`OPERATOR_FEE_RECIPIENT`) in the origin asset's NEP-141 representation. For a gateway running with USDC-on-Base as the origin, that's `nep141:base-0x833589f...omft.near`. To turn that into spendable funds:
+
+1. **Set up the NEAR Intents account.** Any NEAR named account (e.g. `treasury.near`, `foo.tg`) works. You don't need to pre-fund it — 1CS accrues the fee balance lazily as swaps land.
+
+2. **Monitor the balance.** Use the 1Click Swap dashboard or query 1CS directly. There's no on-chain "balance" to read — the credit lives inside 1CS's internal ledger.
+
+3. **Withdraw out-of-band via 1CS.** From your NEAR Intents account, initiate a swap from the accrued NEP-141 (e.g. USDC-on-Base) to wherever you want the funds (e.g. native USDC on NEAR, USDC on Arbitrum, or back to USDC on Base via OMFT bridging). This is exactly the same swap mechanic the gateway exposes to buyers — you're just the buyer this time, withdrawing from the Intents account directly using the [1Click dashboard or SDK](https://docs.near-intents.org/).
+
+4. **Currency note**: the fee is denominated in the **origin** asset, not USD. If your gateway runs on Base USDC, your fee accrues as USDC-on-Base NEP-141 — a stablecoin claim, not a market-rate position. No daily P&L from the swap mechanism itself.
+
+**Caveat**: if you misconfigure `OPERATOR_FEE_RECIPIENT` (e.g. typo, account doesn't exist), 1CS may reject the quote at request time — this surfaces as a 503 `QUOTE_UNAVAILABLE` and no swap happens. Verify the account exists by running a single dry quote against your live config before opening to traffic.
+
+**For zero-fee deployments** (`OPERATOR_MARGIN_BPS=0`): nothing accrues, nothing to collect, `OPERATOR_FEE_RECIPIENT` may be unset.
 
 ---
 
@@ -188,7 +213,7 @@ Before you point real buyers at the gateway:
 The gateway logs at every state transition. With the default `console.log`-style output, you'll see lines like:
 
 ```
-[x402] 402 issued for /api/swap?... → deposit=0x..., amount=10030000
+[x402] 402 issued for /api/swap?... → deposit=0x..., amount=10000000
 [x402] ▶ Broadcasting origin tx for 0x...
 [x402] ✓ Origin tx broadcast for 0x...: tx=0x..., block=12345678
 [x402] ✓ deposit-notify OK (status=KNOWN_DEPOSIT_TX, correlationId=corr-...) for 0x... (tx: 0x...)

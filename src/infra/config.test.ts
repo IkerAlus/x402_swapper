@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { GatewayConfigSchema, loadConfigFromEnv } from "./config.js";
 
-/** Minimal valid env that satisfies every required field. */
+/** Minimal valid env that satisfies every required field (default bps=30 → recipient required). */
 function validEnv(): Record<string, string> {
   return {
     ONE_CLICK_JWT: "test-jwt-token",
@@ -11,6 +11,7 @@ function validEnv(): Record<string, string> {
     ORIGIN_RPC_URLS: "https://mainnet.base.org,https://base.drpc.org",
     FACILITATOR_PRIVATE_KEY: "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
     GATEWAY_REFUND_ADDRESS: "0x1234567890abcdef1234567890abcdef12345678",
+    OPERATOR_FEE_RECIPIENT: "operator.near", // required by D16 with default bps=30
   };
 }
 
@@ -24,6 +25,7 @@ function validSchemaInput() {
     originRpcUrls: ["https://mainnet.base.org"],
     facilitatorPrivateKey: "0xabc",
     gatewayRefundAddress: "0x1234567890abcdef1234567890abcdef12345678",
+    operatorFeeRecipient: "operator.near", // required by D16 with default bps=30
   };
 }
 
@@ -59,14 +61,72 @@ describe("GatewayConfigSchema", () => {
     expect(GatewayConfigSchema.safeParse({}).success).toBe(false);
   });
 
-  describe("operatorMarginBps bounds (0..1000 integer)", () => {
-    it("accepts the boundary values 0 and 1000", () => {
-      expect(GatewayConfigSchema.parse({ ...validSchemaInput(), operatorMarginBps: 0 }).operatorMarginBps).toBe(0);
-      expect(GatewayConfigSchema.parse({ ...validSchemaInput(), operatorMarginBps: 1000 }).operatorMarginBps).toBe(1000);
+  describe("operatorMarginBps bounds (0..500 integer — 1CS appFees ceiling)", () => {
+    it("accepts the boundary values 0 and 500 (with recipient when bps > 0)", () => {
+      // bps=0: recipient is optional (no fee collected at all)
+      expect(GatewayConfigSchema.parse({
+        ...validSchemaInput(),
+        operatorMarginBps: 0,
+        operatorFeeRecipient: undefined,
+      }).operatorMarginBps).toBe(0);
+      // bps=500 (5%, the 1CS-imposed upper bound): recipient required and present
+      expect(GatewayConfigSchema.parse({
+        ...validSchemaInput(),
+        operatorMarginBps: 500,
+      }).operatorMarginBps).toBe(500);
     });
 
-    it.each([-1, 1001, 30.5])("rejects out-of-range value %s", (value) => {
+    it.each([-1, 501, 1000, 30.5])("rejects out-of-range value %s", (value) => {
       expect(GatewayConfigSchema.safeParse({ ...validSchemaInput(), operatorMarginBps: value }).success).toBe(false);
+    });
+  });
+
+  // D16 — when bps > 0, OPERATOR_FEE_RECIPIENT is required and must be a
+  // valid NEAR Intents account.
+  describe("operatorFeeRecipient (D16)", () => {
+    it("rejects when operatorMarginBps > 0 and operatorFeeRecipient is missing", () => {
+      const result = GatewayConfigSchema.safeParse({
+        ...validSchemaInput(),
+        operatorMarginBps: 30,
+        operatorFeeRecipient: undefined,
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.some((i) => i.path.join(".") === "operatorFeeRecipient")).toBe(true);
+      }
+    });
+
+    it("rejects when operatorFeeRecipient is not a valid NEAR Intents account (EVM address)", () => {
+      const result = GatewayConfigSchema.safeParse({
+        ...validSchemaInput(),
+        operatorMarginBps: 30,
+        operatorFeeRecipient: "0x1234567890abcdef1234567890abcdef12345678",
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.some((i) => i.path.join(".") === "operatorFeeRecipient")).toBe(true);
+      }
+    });
+
+    it("accepts named NEAR accounts (.near, .tg) and 64-char implicit hex when bps > 0", () => {
+      for (const recipient of ["operator.near", "sub.operator.near", "ops.tg", "a".repeat(64)]) {
+        const result = GatewayConfigSchema.safeParse({
+          ...validSchemaInput(),
+          operatorMarginBps: 30,
+          operatorFeeRecipient: recipient,
+        });
+        expect(result.success, `recipient=${recipient} should pass`).toBe(true);
+      }
+    });
+
+    it("ignores operatorFeeRecipient validity when operatorMarginBps = 0 (recipient is unused)", () => {
+      // Even an EVM-format recipient passes when bps=0 — it'll never be used.
+      const result = GatewayConfigSchema.safeParse({
+        ...validSchemaInput(),
+        operatorMarginBps: 0,
+        operatorFeeRecipient: "0x1234567890abcdef1234567890abcdef12345678",
+      });
+      expect(result.success).toBe(true);
     });
   });
 });

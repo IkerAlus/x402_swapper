@@ -112,6 +112,7 @@ export function mockGatewayConfig(
     facilitatorPrivateKey: FACILITATOR_PRIVATE_KEY,
     gatewayRefundAddress: FACILITATOR_ADDRESS,
     operatorMarginBps: 30,           // 0.3% — service-default
+    operatorFeeRecipient: "operator.near", // Required by D16 when bps > 0
     maxPollTimeMs: 300_000,          // 5 minutes
     pollIntervalBaseMs: 2_000,       // 2 seconds
     pollIntervalMaxMs: 30_000,       // 30 seconds

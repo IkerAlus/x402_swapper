@@ -5,7 +5,7 @@
 ```
 GET /api/swap?destinationChain=near&destinationAsset=...&destinationAddress=alice.near&amountIn=10000000
    │
-   ▼ 402 + PAYMENT-REQUIRED  (deposit address + amount including operator margin)
+   ▼ 402 + PAYMENT-REQUIRED  (deposit address + amount)
    │
    ▼ buyer signs EIP-3009 authorization to the deposit address
    │
@@ -13,6 +13,7 @@ GET /api/swap?destinationChain=near&destinationAsset=...&destinationAddress=alic
    │
    ▼ gateway broadcasts on Base, polls 1CS, returns 200 + PAYMENT-RESPONSE
        (settlement receipt: destination tx hashes, slippage, operator fee, ...)
+       1CS deducts the operator fee (appFees) and credits OPERATOR_FEE_RECIPIENT
 ```
 
 **Token flow:** `Buyer (USDC on Base) → 1CS Deposit Address → cross-chain swap → Buyer's destination address`
@@ -119,6 +120,7 @@ cp .env.example .env
 | `ORIGIN_RPC_URLS` | Comma-separated URLs | `https://mainnet.base.org,https://base.drpc.org` |
 | `FACILITATOR_PRIVATE_KEY` | EVM private key (0x + 64 hex) | `0x59c6995e...` |
 | `GATEWAY_REFUND_ADDRESS` | EVM address | `0x70997970C51812dc3A010C7d01b50e0d17dc79C8` |
+| `OPERATOR_FEE_RECIPIENT` | NEAR Intents account | `treasury.near` (required iff `OPERATOR_MARGIN_BPS > 0`) |
 
 There are **no merchant-side fields** — buyers supply destination per-request as query params.
 
@@ -126,7 +128,7 @@ There are **no merchant-side fields** — buyers supply destination per-request 
 
 | Field | Default | Notes |
 |-------|---------|-------|
-| `OPERATOR_MARGIN_BPS` | `30` (0.3%) | Margin added on top of the 1CS quote. Range `0`–`1000`. Surfaced in `extra.crossChain.operatorFee`. |
+| `OPERATOR_MARGIN_BPS` | `30` (0.3%) | Operator fee in basis points. Range `0`–`500` (1CS rejects appFees above 5%). 1CS deducts this from the swap (via `appFees`) and credits `OPERATOR_FEE_RECIPIENT` on NEAR Intents. Surfaced in `extra.crossChain.operatorFee`. `0` disables the fee entirely. |
 | `ALLOWED_ORIGINS` | unset (reflect any) | CORS allowlist for browser clients |
 | `PUBLIC_BASE_URL` | unset | Required before registering on x402scan |
 | `OWNERSHIP_PROOFS` | empty | Comma-separated EIP-191 proofs (use `npx tsx scripts/generate-ownership-proof.ts`) |
@@ -211,7 +213,7 @@ curl -i http://localhost:3402/api/swap
 curl -i 'http://localhost:3402/api/swap?destinationChain=near&destinationAsset=nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1&destinationAddress=alice.near&amountIn=10000000'
 ```
 
-The 402 response carries a base64-encoded `PAYMENT-REQUIRED` header. Decode it to see the deposit address, the amount (including the operator margin), and the `extra.crossChain` metadata block (quote ID, expected destination amount, refund target, operator fee breakdown).
+The 402 response carries a base64-encoded `PAYMENT-REQUIRED` header. Decode it to see the deposit address, the amount (exactly your `amountIn` — the operator fee is deducted from the swap output, not added on top), and the `extra.crossChain` metadata block (quote ID, expected destination amount, refund target, operator fee breakdown).
 
 ### End-to-end with the test client
 

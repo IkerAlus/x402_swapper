@@ -265,6 +265,48 @@ describeIfLive("Live 1CS API Integration", () => {
     }, LIVE_TIMEOUT);
   });
 
+  // ── 3b. appFees (D15 — Phase 14): operator fee deduction is real ──
+
+  describe("appFees", () => {
+    it("with appFees > 0, the destination amountOut is meaningfully smaller than without", async () => {
+      const deadline = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+      const baseRequest = {
+        dry: true,
+        swapType: QuoteRequest.swapType.EXACT_INPUT,
+        slippageTolerance: 50,
+        originAsset: LIVE_ORIGIN_ASSET,
+        depositType: QuoteRequest.depositType.ORIGIN_CHAIN,
+        destinationAsset: LIVE_DESTINATION_ASSET,
+        amount: LIVE_AMOUNT_IN,
+        refundTo: "0x0000000000000000000000000000000000000001",
+        refundType: QuoteRequest.refundType.ORIGIN_CHAIN,
+        recipient: LIVE_DESTINATION_ADDRESS,
+        recipientType: QuoteRequest.recipientType.DESTINATION_CHAIN,
+        deadline,
+      };
+
+      // Quote without appFees → buyer-friendly amountOut.
+      const noFee = await OneClickService.getQuote(baseRequest);
+
+      // Same quote with a 30 bps appFee to "test.near".
+      const withFee = await OneClickService.getQuote({
+        ...baseRequest,
+        appFees: [{ recipient: "test.near", fee: 30 }],
+      });
+
+      const amountOutNoFee = BigInt(noFee.quote.amountOut);
+      const amountOutWithFee = BigInt(withFee.quote.amountOut);
+
+      // The fee-bearing quote returns less. The delta should be ≈ 0.3% of
+      // amountIn (1CS deducts the fee from input then quotes the swap).
+      // We accept any drop > 0.2% × amountIn — leaves slack for 1CS rate
+      // movement between the two quote calls.
+      expect(amountOutWithFee).toBeLessThan(amountOutNoFee);
+      const expectedDeduction = (BigInt(LIVE_AMOUNT_IN) * 20n) / 10000n; // 0.2%
+      expect(amountOutNoFee - amountOutWithFee).toBeGreaterThanOrEqual(expectedDeduction);
+    }, LIVE_TIMEOUT);
+  });
+
   // ── 4. Error handling ────────────────────────────────────────────
 
   describe("Error handling", () => {
@@ -337,8 +379,8 @@ describeIfLive("Live 1CS API Integration", () => {
       expect(accepted.asset.toLowerCase()).toBe(LIVE_USDC_ADDRESS.toLowerCase());
       expect(accepted.payTo).toMatch(/^0x[a-fA-F0-9]{40}$/);
 
-      // Amount is amountIn × (10000 + bps) / 10000 — at least the buyer's amountIn.
-      expect(BigInt(accepted.amount)).toBeGreaterThanOrEqual(BigInt(LIVE_AMOUNT_IN));
+      // Amount is exactly amountIn — operator fee is deducted from the swap output by 1CS (appFees), not added on top.
+      expect(BigInt(accepted.amount)).toBe(BigInt(LIVE_AMOUNT_IN));
       expect(accepted.maxTimeoutSeconds).toBeGreaterThan(0);
       expect(accepted.extra.name).toBe("USD Coin");
       expect(accepted.extra.assetTransferMethod).toBe("eip3009");

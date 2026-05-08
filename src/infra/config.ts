@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { validateOwnershipProofs } from "../http/ownership-proof.js";
+import { isValidNearAccount } from "../payment/chain-prefixes.js";
 
 /**
  * Gateway configuration schema.
@@ -46,19 +47,40 @@ export const GatewayConfigSchema = z.object({
 
   // ── Operator economics ─────────────────────────────────────────────
   /**
-   * Operator margin in basis points (30 = 0.3%). Added to the 1CS-quoted
-   * `amountIn` to compute the price the buyer signs for. Surfaced
-   * transparently in `extra.crossChain.operatorFee` on every 402.
+   * Operator margin in basis points (30 = 0.3%). Charged via 1CS's
+   * `appFees` mechanism (D15 / Phase 14): 1CS deducts the fee from the
+   * swap and credits it to {@link operatorFeeRecipient}'s NEAR Intents
+   * account. The buyer signs for exactly `inputs.amountIn` — no inflation
+   * of the signed amount. Surfaced transparently in
+   * `extra.crossChain.operatorFee` on every 402.
    *
-   * Range: 0–1000 (0% to 10%). `0` is allowed for free / loss-leader
-   * deployments. See D3 in `implementation_plan.md`.
+   * Range: 0–500 (0% to 5%). 1CS rejects total appFees > 500 bps with
+   * 400 "Total fee is N basis points, which exceeds 5% (500)", so we
+   * cap at 500 here to fail fast at startup rather than at first quote.
+   * `0` is allowed for free / loss-leader deployments (and disables
+   * `appFees` entirely). See D3 in `implementation_plan.md`.
    */
   operatorMarginBps: z
     .number()
     .int()
     .min(0, "OPERATOR_MARGIN_BPS must be >= 0")
-    .max(1000, "OPERATOR_MARGIN_BPS must be <= 1000 (10%)")
+    .max(500, "OPERATOR_MARGIN_BPS must be <= 500 (5%) — 1CS appFees ceiling")
     .default(30),
+
+  /**
+   * NEAR Intents account that receives the operator margin (D16 / Phase 14).
+   *
+   * Required when `operatorMarginBps > 0`; ignored when bps is 0.
+   * Format: NEAR account name (e.g. `operator.near`, `foo.tg`) or 64-char
+   * implicit hex account. EVM addresses are not Intents accounts and are
+   * rejected. Validated by {@link isValidNearAccount}.
+   *
+   * The fee accrues here in the origin asset's NEP-141 representation
+   * (e.g. nep141:base-…USDC.omft.near for USDC on Base). The operator
+   * withdraws out-of-band via 1CS — not the gateway's responsibility.
+   * See `docs/OPERATOR_GUIDE.md` § "Collecting your operator fee".
+   */
+  operatorFeeRecipient: z.string().optional(),
 
   // ── Tuning ─────────────────────────────────────────────────────────
   /** Maximum wall-clock time (ms) spent polling 1CS for a terminal status. */
@@ -115,6 +137,27 @@ export const GatewayConfigSchema = z.object({
    * documents. Empty by default.
    */
   ownershipProofs: z.array(z.string().min(1)).default([]),
+}).superRefine((cfg, ctx) => {
+  // D16 — when `OPERATOR_MARGIN_BPS > 0`, the operator must also configure
+  // `OPERATOR_FEE_RECIPIENT`, and it must be a valid NEAR Intents account.
+  // (When bps = 0, no fee is collected and the recipient is ignored.)
+  if (cfg.operatorMarginBps > 0) {
+    if (!cfg.operatorFeeRecipient) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["operatorFeeRecipient"],
+        message:
+          "OPERATOR_FEE_RECIPIENT is required when OPERATOR_MARGIN_BPS > 0 — set it to the NEAR Intents account that should receive the operator fee.",
+      });
+    } else if (!isValidNearAccount(cfg.operatorFeeRecipient)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["operatorFeeRecipient"],
+        message:
+          "OPERATOR_FEE_RECIPIENT must be a valid NEAR Intents account (named '*.near'/'*.tg' or 64-char implicit hex).",
+      });
+    }
+  }
 });
 
 /** Validated gateway configuration object. */
@@ -148,6 +191,7 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv = process.env): Gateway
     facilitatorPrivateKey: env.FACILITATOR_PRIVATE_KEY,
     gatewayRefundAddress: env.GATEWAY_REFUND_ADDRESS,
     operatorMarginBps: env.OPERATOR_MARGIN_BPS ? Number(env.OPERATOR_MARGIN_BPS) : undefined,
+    operatorFeeRecipient: orUndef(env.OPERATOR_FEE_RECIPIENT),
     maxPollTimeMs: env.MAX_POLL_TIME_MS ? Number(env.MAX_POLL_TIME_MS) : undefined,
     pollIntervalBaseMs: env.POLL_INTERVAL_BASE_MS ? Number(env.POLL_INTERVAL_BASE_MS) : undefined,
     pollIntervalMaxMs: env.POLL_INTERVAL_MAX_MS ? Number(env.POLL_INTERVAL_MAX_MS) : undefined,
