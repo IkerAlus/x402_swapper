@@ -22,10 +22,6 @@ import type { SwapRequestInput } from "../types.js";
  * via the 1CS SDK's error path.
  */
 export const SwapRequestInputSchema: z.ZodType<SwapRequestInput> = z.object({
-  destinationChain: z
-    .string()
-    .min(1, "destinationChain is required")
-    .regex(/^[a-z0-9-]+$/, "destinationChain must be a chain prefix (lowercase, hyphens allowed)"),
   destinationAsset: z
     .string()
     .min(1, "destinationAsset is required")
@@ -51,18 +47,13 @@ export const SwapRequestInputSchema: z.ZodType<SwapRequestInput> = z.object({
  */
 export const SwapRequestInputJsonSchema: Record<string, unknown> = {
   type: "object",
-  required: ["destinationChain", "destinationAsset", "destinationAddress", "amountIn"],
+  required: ["destinationAsset", "destinationAddress", "amountIn"],
   additionalProperties: false,
   properties: {
-    destinationChain: {
-      type: "string",
-      pattern: "^[a-z0-9-]+$",
-      description: "Chain prefix the buyer wants to receive on (e.g. 'near', 'arbitrum', 'solana').",
-    },
     destinationAsset: {
       type: "string",
       pattern: "^nep141:",
-      description: "1CS NEP-141 asset ID the buyer wants to receive (e.g. 'nep141:...').",
+      description: "1CS NEP-141 asset ID the buyer wants to receive (e.g. 'nep141:...'). The destination chain is derived from the asset's prefix.",
     },
     destinationAddress: {
       type: "string",

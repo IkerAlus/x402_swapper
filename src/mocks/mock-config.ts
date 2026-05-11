@@ -47,44 +47,42 @@ export const ORIGIN_ASSET_IN = "nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bd
 /**
  * Pre-built buyer destination inputs for parametrized multi-chain tests.
  *
- * Each preset is a ready-to-use `{ destinationChain, destinationAsset,
- * destinationAddress }` triple suitable for splatting into a
- * `SwapRequestInput`. Pair with `amountIn` (and optionally `refundAddress`)
- * at the test site:
+ * Each preset is a ready-to-use `{ destinationAsset, destinationAddress }`
+ * pair suitable for splatting into a `SwapRequestInput`. Pair with
+ * `amountIn` (and optionally `refundAddress`) at the test site:
  *
  * ```typescript
  * const inputs = { ...DESTINATION_PRESETS.arbitrum, amountIn: "10000000" };
  * ```
+ *
+ * Note: the destination chain is *not* a separate field — it's derived
+ * from the asset's NEP-141 prefix at receipt-building time. The preset's
+ * top-level key (e.g. `arbitrum`) is just a convenience label for test
+ * authors.
  */
 export const DESTINATION_PRESETS = {
   near: {
-    destinationChain: "near",
     destinationAsset: "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
     destinationAddress: "alice.near",
   },
   arbitrum: {
-    destinationChain: "arbitrum",
     destinationAsset: "nep141:arb-0xaf88d065e77c8cc2239327c5edb3a432268e5831.omft.near",
     destinationAddress: "0x1234567890abcdef1234567890abcdef12345678",
   },
   ethereum: {
-    destinationChain: "ethereum",
     destinationAsset: "nep141:eth-0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48.omft.near",
     destinationAddress: "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd",
   },
   polygon: {
-    destinationChain: "polygon",
     destinationAsset: "nep141:polygon-0x3c499c542cef5e3811e1192ce70d8cc03d5c3359.omft.near",
     destinationAddress: "0xfedcba9876543210fedcba9876543210fedcba98",
   },
   // Non-EVM destination presets
   stellar: {
-    destinationChain: "stellar",
     destinationAsset: "nep141:stellar-GAXYZ1234567890abcdef.omft.near",
     destinationAddress: "GAXYZ1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF",
   },
   solana: {
-    destinationChain: "solana",
     destinationAsset: "nep141:solana-EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v.omft.near",
     destinationAddress: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
   },

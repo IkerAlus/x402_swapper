@@ -78,7 +78,6 @@ const SWAP_PATH = "/api/swap";
 
 function liveSwapInputs(): SwapRequestInput {
   return {
-    destinationChain: "near",
     destinationAsset: LIVE_DESTINATION_ASSET,
     destinationAddress: LIVE_DESTINATION_ADDRESS,
     amountIn: LIVE_AMOUNT_IN,
@@ -88,7 +87,6 @@ function liveSwapInputs(): SwapRequestInput {
 function liveSwapQuery(): Record<string, string> {
   const i = liveSwapInputs();
   return {
-    destinationChain: i.destinationChain,
     destinationAsset: i.destinationAsset,
     destinationAddress: i.destinationAddress,
     amountIn: i.amountIn,
@@ -491,7 +489,10 @@ describeIfLive("Live 1CS API Integration", () => {
       expect(res.body.error).toBe("AUTHENTICATION_ERROR");
     }, LIVE_TIMEOUT);
 
-    it("maps 1CS 400 (bad asset) to gateway 503", async () => {
+    it("maps 1CS 400 on operator-fault originAsset to gateway 503 SERVICE_UNAVAILABLE", async () => {
+      // Operator-config bug: ORIGIN_ASSET_IN is malformed. From the buyer's POV
+      // this is non-retryable AND not their fault — surface as 503 so the
+      // buyer doesn't waste time editing their (correct) query.
       const deps = liveDeps({
         cfg: liveConfig({ originAssetIn: "nep141:nonexistent.near" }),
       });
@@ -499,7 +500,73 @@ describeIfLive("Live 1CS API Integration", () => {
 
       const res = await request(app).get(SWAP_PATH).query(liveSwapQuery());
       expect(res.status).toBe(503);
-      expect(res.body.error).toBe("QUOTE_UNAVAILABLE");
+      expect(res.body.error).toBe("SERVICE_UNAVAILABLE");
+    }, LIVE_TIMEOUT);
+
+    it("maps 1CS 400 on buyer-fault destinationAsset to gateway 400 INVALID_INPUT with upstream details", async () => {
+      // Buyer-input bug: destinationAsset is a NEP-141 ID 1CS doesn't recognise.
+      // 1CS rejects with 400 + a "tokenOut"-shaped message → the gateway must
+      // surface this as a buyer-actionable 400 with the upstream message
+      // promoted into details[] (source: "upstream").
+      const deps = liveDeps();
+      const app = createLiveTestApp(deps);
+
+      const res = await request(app).get(SWAP_PATH).query({
+        ...liveSwapQuery(),
+        destinationAsset: "nep141:nonexistent.near",
+      });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("INVALID_INPUT");
+
+      // details[] should contain at least one upstream entry carrying the
+      // 1CS message verbatim. We don't assert exact wording (1CS strings are
+      // unversioned) but the entry must exist and have non-empty content.
+      expect(Array.isArray(res.body.details)).toBe(true);
+      const upstreamEntries = (res.body.details as Array<{ source: string; message: string }>).filter(
+        (d) => d.source === "upstream",
+      );
+      expect(upstreamEntries.length).toBeGreaterThan(0);
+      expect(upstreamEntries[0]!.message.length).toBeGreaterThan(0);
+    }, LIVE_TIMEOUT);
+
+    it("maps 1CS 400 on a syntactically-valid but non-existent destinationAddress to gateway 400 INVALID_INPUT with a gateway-hint", async () => {
+      // The exact failure a buyer hits when they typo a NEAR account:
+      // `ikeralu.near` is a structurally-valid NEAR account name (so
+      // validateBuyerDestination accepts it), but the account doesn't
+      // exist on-chain. 1CS rejects with a vague 400 (often "Internal
+      // server error") that names no specific field — classifier
+      // returns "unknown" → gateway must surface 400 INVALID_INPUT
+      // with both the upstream message AND a gateway-hint listing the
+      // most-likely candidates so the buyer can act.
+      const deps = liveDeps();
+      const app = createLiveTestApp(deps);
+
+      const res = await request(app).get(SWAP_PATH).query({
+        ...liveSwapQuery(),
+        destinationAddress: "definitely-does-not-exist-anywhere-12345.near",
+      });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("INVALID_INPUT");
+      expect(Array.isArray(res.body.details)).toBe(true);
+
+      const details = res.body.details as Array<{ source: string; message: string }>;
+      const upstream = details.filter((d) => d.source === "upstream");
+      const hints = details.filter((d) => d.source === "gateway-hint");
+
+      // 1CS responded with *some* message; we don't pin the exact wording
+      // (it's unversioned). The classification depends on what 1CS said:
+      // if it mentioned "recipient", we're in the "buyer" branch (no hint
+      // needed); if vague, we're in "unknown" → hint required.
+      expect(upstream.length).toBeGreaterThan(0);
+      const upstreamMsg = upstream[0]!.message.toLowerCase();
+      const looksClassifiable = /recipient|tokenout|destination|amount/.test(upstreamMsg);
+      if (!looksClassifiable) {
+        // Unknown classification path: gateway-hint MUST be present.
+        expect(hints.length).toBeGreaterThan(0);
+        expect(hints[0]!.message).toMatch(/destinationAddress|destinationAsset|amountIn/);
+      }
     }, LIVE_TIMEOUT);
   });
 });

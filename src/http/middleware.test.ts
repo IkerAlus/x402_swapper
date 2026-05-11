@@ -47,7 +47,6 @@ const SWAP_PATH = "/api/swap";
 /** Build the buyer's query string for the swap route from a SwapRequestInput. */
 function swapQuery(inputs: SwapRequestInput = mockSwapInputs()): Record<string, string> {
   const out: Record<string, string> = {
-    destinationChain: inputs.destinationChain,
     destinationAsset: inputs.destinationAsset,
     destinationAddress: inputs.destinationAddress,
     amountIn: inputs.amountIn,
@@ -648,6 +647,107 @@ describe("x402 Middleware", () => {
       const logged = consoleErrorSpy.mock.calls.map((c) => String(c[0])).join("\n");
       expect(logged).toContain("plain error, no context");
       expect(logged).not.toContain("context:"); // no context header emitted
+    });
+
+    // Buyer-fault 1CS 400 (e.g. tokenOut/recipient/amount): the upstream
+    // message string is promoted to `details[]` as a discriminated entry,
+    // while the rest of the context bag (request fields, hints) stays
+    // server-side only.
+    it("promotes context.upstreamMessage into details[] for buyer-fault InvalidInputError (400)", async () => {
+      const { InvalidInputError } = await import("../types.js");
+      const failQuoteFn: QuoteFn = async () => {
+        throw new InvalidInputError(
+          "1CS quote rejected (400): tokenOut is not valid",
+          {
+            originAsset: "nep141:base-0x833589f...omft.near",
+            destinationAsset: "nep141:nonexistent.near",
+            recipient: "secret-recipient.near",
+            amount: "10000000",
+            refundTo: "0x1234567890abcdef1234567890abcdef12345678",
+            upstreamStatus: 400,
+            upstreamMessage: "tokenOut is not valid",
+            hints: ["destinationAsset prefix \"nonexistent\" unrecognized"],
+          },
+        );
+      };
+      const failApp = createTestApp(buildDeps({ quoteFn: failQuoteFn }));
+
+      const res = await getSwap(failApp);
+
+      // Status flipped from old 503 to new 400.
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("INVALID_INPUT");
+
+      // The narrow upstreamMessage IS promoted to details[].
+      expect(Array.isArray(res.body.details)).toBe(true);
+      const upstreamEntries = (res.body.details as Array<{ source: string; message: string }>).filter(
+        (d) => d.source === "upstream",
+      );
+      expect(upstreamEntries.length).toBe(1);
+      expect(upstreamEntries[0]!.message).toBe("tokenOut is not valid");
+
+      // H2 invariant: the rest of the context bag stays server-side only.
+      // Body has no `context`, no `hints`, no full request fields.
+      expect(res.body).not.toHaveProperty("context");
+      expect(res.body).not.toHaveProperty("hints");
+      const bodyStr = JSON.stringify(res.body);
+      expect(bodyStr).not.toContain("secret-recipient.near");
+      expect(bodyStr).not.toContain("nep141:base-0x833589f");
+      expect(bodyStr).not.toContain("destinationAsset prefix"); // hint string
+
+      // Server log still has the full bag under the correlation ID.
+      const logged = consoleErrorSpy.mock.calls.map((c) => String(c[0])).join("\n");
+      expect(logged).toContain("secret-recipient.near");
+      expect(logged).toContain("\"upstreamStatus\": 400");
+      expect(logged).toContain(res.body.correlationId);
+    });
+
+    // Unknown-source 1CS 400 (e.g. vague "Internal server error" body):
+    // the gateway attaches gatewayHints[] guidance. Both the upstream
+    // message AND the gateway hints are promoted to details[] (the rest
+    // of the context bag still stays server-side).
+    it("promotes context.gatewayHints into details[] alongside upstreamMessage on unknown-source 400", async () => {
+      const { InvalidInputError } = await import("../types.js");
+      const failQuoteFn: QuoteFn = async () => {
+        throw new InvalidInputError(
+          "1CS quote rejected (400, unknown): Internal server error",
+          {
+            originAsset: "nep141:base-0x833589f...omft.near",
+            destinationAsset: "nep141:17208628f...",
+            recipient: "ikeralu.near", // typo of a real account
+            amount: "75000",
+            refundTo: "0xCB2233Ac1D0Fc79082026c1E7DeB3E93132BFDE3",
+            upstreamStatus: 400,
+            upstreamMessage: "Internal server error",
+            hints: [], // diagnoseQuoteRequest found nothing — that's why we hit "unknown"
+            gatewayHints: [
+              "1CS did not name a specific field. Common causes: destinationAddress doesn't exist; destinationAsset isn't listed; amountIn below minimum.",
+            ],
+          },
+        );
+      };
+      const failApp = createTestApp(buildDeps({ quoteFn: failQuoteFn }));
+
+      const res = await getSwap(failApp);
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("INVALID_INPUT");
+      expect(Array.isArray(res.body.details)).toBe(true);
+
+      const details = res.body.details as Array<{ source: string; message: string }>;
+      const upstream = details.filter((d) => d.source === "upstream");
+      const hints = details.filter((d) => d.source === "gateway-hint");
+
+      expect(upstream.length).toBe(1);
+      expect(upstream[0]!.message).toBe("Internal server error");
+      expect(hints.length).toBe(1);
+      expect(hints[0]!.message).toMatch(/destinationAddress|destinationAsset|amountIn/);
+
+      // H2 invariant unchanged — recipient typo and other internal context
+      // not exposed; only the upstream message + gateway-authored hint are.
+      const bodyStr = JSON.stringify(res.body);
+      expect(bodyStr).not.toContain("\"upstreamStatus\"");
+      expect(bodyStr).not.toContain("\"refundTo\"");
     });
   });
 });

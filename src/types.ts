@@ -109,11 +109,16 @@ export type OneClickStatus =
  * The Zod validator in {@link ../http/swap-input.js} parses raw `req.query`
  * into this shape; the quote engine reads these fields when building the
  * 1CS `EXACT_INPUT` quote request.
+ *
+ * Note: the destination *chain* is intentionally NOT a buyer input — it's
+ * fully derivable from `destinationAsset`'s NEP-141 prefix (via
+ * {@link extractDestinationChain} in `chain-prefixes.ts`), and 1CS routes
+ * the swap based on the asset, not a separate chain field. Keeping both as
+ * inputs creates a "two sources of truth" footgun where a buyer could
+ * declare `destinationChain: "near"` while passing an Arbitrum asset.
  */
 export interface SwapRequestInput {
-  /** Chain prefix the buyer wants to receive on, e.g. `"near"`, `"arbitrum"`, `"solana"`. */
-  destinationChain: string;
-  /** 1CS asset ID, e.g. `"nep141:..."`. */
+  /** 1CS asset ID, e.g. `"nep141:..."`. The destination chain is derived from this. */
   destinationAsset: string;
   /** Buyer's recipient on the destination chain. Format depends on chain. */
   destinationAddress: string;
@@ -482,6 +487,35 @@ export interface RefundInfo {
 // Each error carries an `httpStatus` so the middleware can map it to the
 // correct HTTP response code without a separate lookup table.
 // ═══════════════════════════════════════════════════════════════════════
+
+/**
+ * One entry in the `details[]` array attached to a 400 `INVALID_INPUT`
+ * response. Discriminated by `source` so a client UI can render each
+ * category differently:
+ *
+ *  - `buyer-zod`    — structural failure caught by the Zod validator
+ *                     (missing field, regex mismatch). Always has a `path`.
+ *  - `buyer-format` — chain-format cross-check failure caught by
+ *                     `validateBuyerDestination` (e.g. EVM address on a
+ *                     NEAR-native destination). `path` is optional because
+ *                     the failure may span multiple fields.
+ *  - `upstream`     — 1CS rejected the quote and the upstream message has
+ *                     been classified as buyer-actionable. No `path` —
+ *                     1CS's error strings are unversioned and we don't try
+ *                     to map them to client-facing field names.
+ *  - `gateway-hint` — diagnostic guidance authored by the gateway when 1CS
+ *                     rejects a quote with a vague upstream message that
+ *                     our classifier can't pin to a specific field. Lists
+ *                     the most-likely candidates so the buyer has somewhere
+ *                     to start. No `path` — by definition we don't know.
+ *
+ * Exhaustive on `source`; downstream clients should switch on it.
+ */
+export type ErrorDetail =
+  | { source: "buyer-zod"; path: string; message: string }
+  | { source: "buyer-format"; path?: string; message: string }
+  | { source: "upstream"; message: string }
+  | { source: "gateway-hint"; message: string };
 
 /**
  * Structured diagnostic bag attached to a {@link GatewayError} for

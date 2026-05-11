@@ -28,7 +28,6 @@ function makeSwapState(overrides: Partial<SwapState> = {}): SwapState {
   return {
     depositAddress: "0xDEPOSIT_001",
     swapInputs: {
-      destinationChain: "near",
       destinationAsset: "nep141:usdc.near",
       destinationAddress: "alice.near",
       amountIn: "10000000",

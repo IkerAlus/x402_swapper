@@ -44,7 +44,7 @@ Four steps. Understanding them helps you debug any issues.
 You send a GET to `/api/swap` with your destination as query parameters. The gateway calls 1CS for a quote and responds with **402 Payment Required**:
 
 ```
-GET /api/swap?destinationChain=near&destinationAsset=nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1&destinationAddress=alice.near&amountIn=10000000 HTTP/1.1
+GET /api/swap?destinationAsset=nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1&destinationAddress=alice.near&amountIn=10000000 HTTP/1.1
 Host: gateway.example.com
 
 → 402 Payment Required
@@ -57,9 +57,8 @@ Host: gateway.example.com
 
 | Param | Format | Meaning |
 |---|---|---|
-| `destinationChain` | lowercase prefix (`near`, `arbitrum`, `solana`, …) | Display label echoed in the receipt |
-| `destinationAsset` | `nep141:...` (1CS NEP-141 asset ID) | What you want to receive |
-| `destinationAddress` | chain-specific (NEAR account, EVM `0x…`, Stellar `G…`, etc.) | Where to send it |
+| `destinationAsset` | `nep141:...` (1CS NEP-141 asset ID) | What you want to receive. The destination *chain* is derived from the asset's prefix (`nep141:arb-...` → Arbitrum, `nep141:solana-...` → Solana, etc.) — no separate chain field |
+| `destinationAddress` | chain-specific (NEAR account, EVM `0x…`, Stellar `G…`, etc.) | Where to send it. Format must match the chain implied by `destinationAsset` |
 | `amountIn` | digit-only positive integer (smallest unit) | What you pay in USDC on Base |
 
 #### Optional query parameter
@@ -81,10 +80,9 @@ $ curl 'http://localhost:3402/api/swap'
   "error": "INVALID_INPUT",
   "message": "Request input failed validation.",
   "details": [
-    { "path": "destinationChain", "message": "Required" },
-    { "path": "destinationAsset", "message": "Required" },
-    { "path": "destinationAddress", "message": "Required" },
-    { "path": "amountIn", "message": "Required" }
+    { "source": "buyer-zod", "path": "destinationAsset", "message": "Required" },
+    { "source": "buyer-zod", "path": "destinationAddress", "message": "Required" },
+    { "source": "buyer-zod", "path": "amountIn", "message": "Required" }
   ],
   "correlationId": "a1b2c3d4"
 }
@@ -99,7 +97,7 @@ The `PAYMENT-REQUIRED` header is a base64-encoded JSON envelope:
 ```json
 {
   "x402Version": 2,
-  "resource": { "url": "/api/swap?destinationChain=near&...", "description": "x402-1CS swap service" },
+  "resource": { "url": "/api/swap?destinationAsset=...", "description": "x402-1CS swap service" },
   "accepts": [
     {
       "scheme": "exact",
@@ -200,7 +198,7 @@ Then construct the `PAYMENT-SIGNATURE` payload:
 ```json
 {
   "x402Version": 2,
-  "resource": { "url": "/api/swap?destinationChain=near&..." },
+  "resource": { "url": "/api/swap?destinationAsset=..." },
   "accepted": { "...the accepted payment option from step 2..." },
   "payload": {
     "signature": "0x...",
@@ -223,7 +221,7 @@ For **Permit2**, you need a prior `approve()` to the Permit2 contract. The signi
 Retry the same GET request with the same query string AND the `PAYMENT-SIGNATURE` header (base64-encoded):
 
 ```
-GET /api/swap?destinationChain=near&...  HTTP/1.1
+GET /api/swap?destinationAsset=...  HTTP/1.1
 Host: gateway.example.com
 PAYMENT-SIGNATURE: eyJ4NDAyVmVyc2lvbi...
 
@@ -290,8 +288,7 @@ const client = new X402Client({ gatewayUrl: "http://localhost:3402" });
 
 const result = await client.payAndFetch(wallet, "/api/swap", {
   query: {
-    destinationChain: "near",
-    destinationAsset: "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
+    destinationAsset: "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1", // USDC on NEAR
     destinationAddress: "alice.near",
     amountIn: "10000000",
     // refundAddress: "0xYourEvmRefundAddress",  // optional but recommended
@@ -318,7 +315,7 @@ The client handles all four protocol steps internally (request → decode → si
 
 The repository includes `scripts/test-client.ts` for manual end-to-end testing. The buyer's destination params live in a `BUYER_INPUTS` block at the top of the file — edit them inline to point at the destination you want. The `BUYER_PRIVATE_KEY` and `DRY_RUN` toggle stay as env vars (key kept out of source; run-mode is a CLI choice).
 
-The default `BUYER_INPUTS` ships with `destinationChain: "near"`, `destinationAsset` = USDC on NEAR, `destinationAddress: "buyer.near"` (a placeholder — change before running with `DRY_RUN=false`), and `amountIn: "1000000"` (1 USDC). Inline comments list NEP-141 asset IDs for Arbitrum, Ethereum, Polygon, Optimism, Solana, and Stellar.
+The default `BUYER_INPUTS` ships with `destinationAsset` = USDC on NEAR (chain derived from prefix), `destinationAddress: "buyer.near"` (a placeholder — change before running with `DRY_RUN=false`), and `amountIn: "1000000"` (1 USDC). Inline comments list NEP-141 asset IDs for Arbitrum, Ethereum, Polygon, Optimism, Solana, and Stellar.
 
 ```bash
 # Dry run — no funds needed, prints the 402 envelope and stops
@@ -338,15 +335,35 @@ The script prints each step: 402 envelope, signed payload, settlement response (
 
 | Status | error code | What happened | What to do |
 |---|---|---|---|
-| `400` | `INVALID_INPUT` | Your query failed Zod validation OR `validateBuyerDestination` chain-format check | Read `details[].path` + `message` and fix the field |
+| `400` | `INVALID_INPUT` | Your query failed Zod validation, `validateBuyerDestination` chain-format check, OR 1CS rejected the quote — either with a recognisable buyer-controlled field name (`tokenOut` / `recipient` / `amount` / a buyer-supplied `refundAddress`) OR with a vague message ("Internal server error" etc.). In the vague case, a `gateway-hint` details entry lists the most-likely culprits | Read `details[]` and fix the field. See "details[] shape" below |
 | `402` | (with PAYMENT-REQUIRED) | Either no signature was sent, or the signature was rejected (signer mismatch, balance too low, signed wrong amount, etc.) | Check the `error` field on the 402 envelope, sign again |
 | `409` | `NONCE_ALREADY_USED` | Reusing an EIP-3009 nonce that was already broadcast | Generate a fresh random nonce and re-sign |
 | `429` | `RATE_LIMITED` | You hit the per-IP quote rate limit | Back off; check `Retry-After` header |
 | `502` | `SWAP_FAILED` | 1CS reported `FAILED` or `REFUNDED` after your transfer landed | Check `correlationId`, contact the gateway operator. Refund handling depends on whether you supplied `refundAddress` (1CS routes refunds to it automatically when supplied) |
-| `503` | `QUOTE_UNAVAILABLE` / `AUTHENTICATION_ERROR` / `SERVICE_UNAVAILABLE` / `DEADLINE_TOO_SHORT` / `INSUFFICIENT_GAS` | Upstream issue at 1CS, JWT, or facilitator gas | Try again shortly. Persistent → contact the operator with the correlation ID |
+| `503` | `AUTHENTICATION_ERROR` / `SERVICE_UNAVAILABLE` / `DEADLINE_TOO_SHORT` / `INSUFFICIENT_GAS` | Gateway-side issue: operator JWT, facilitator gas, OR a 1CS rejection that names an operator-controlled field (`tokenIn` / `originAsset`). You can't fix this by editing your query — the operator must act | Contact the operator with the correlation ID. Don't waste cycles retrying with different inputs |
 | `504` | `SWAP_TIMEOUT` | 1CS polling exceeded the gateway's max poll time mid-settlement | Your transfer may still complete on-chain. Contact the operator with the correlation ID |
 
 Every error response carries a short `correlationId` (8 hex chars). Quote it when reporting issues — operators can grep server logs for the full context.
+
+**Why some 1CS rejections are 400 and others are 503:** the gateway routes by *who can fix it*. If 1CS's rejection message names a field you control (`tokenOut`, `recipient`, `amount`, or your own `refundAddress`), or doesn't name any field at all, you get 400 — you're the one who can act. If 1CS's message names an operator-controlled field (`tokenIn`, `originAsset`), you get 503 — only the operator can fix that, so retrying with different inputs is pointless.
+
+### `details[]` shape (on 400 INVALID_INPUT)
+
+A 400 response carries a `details: ErrorDetail[]` array. Each entry is discriminated by `source`:
+
+```ts
+type ErrorDetail =
+  | { source: "buyer-zod";    path: string; message: string }  // structural — missing/regex
+  | { source: "buyer-format"; path?: string; message: string } // chain-format mismatch
+  | { source: "upstream";     message: string }                // 1CS message verbatim
+  | { source: "gateway-hint"; message: string };               // gateway diagnostic guidance
+```
+
+- `buyer-zod` and `buyer-format` come from the gateway's pre-quote validators and always identify the buggy field via `path` (when available).
+- `upstream` carries 1CS's own error string verbatim (e.g. `"tokenOut is not valid"`). No `path` — 1CS's error wording is unversioned and we don't try to map it to client-facing field names. Read the message and infer which field is at fault.
+- `gateway-hint` is diagnostic guidance authored by the gateway itself. Appears specifically when 1CS rejected the quote with a vague message that the gateway's classifier couldn't pin to a field — typical case: your `destinationAddress` is structurally valid but the account doesn't exist on-chain. The hint lists the most-likely candidates so you have somewhere to start; treat retry-once-before-changing-anything as the suggested first action (a rare transient 1CS issue would resolve on its own).
+
+A single response may contain entries from more than one source.
 
 ---
 

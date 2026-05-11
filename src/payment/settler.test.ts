@@ -151,7 +151,6 @@ function makeVerifiedState(
   return {
     depositAddress: TEST_DEPOSIT_ADDRESS,
     swapInputs: {
-      destinationChain: "near",
       destinationAsset: "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
       destinationAddress: "alice.near",
       amountIn: "10500000",
@@ -944,7 +943,6 @@ describe("recoverSettlement", () => {
     return {
       depositAddress: TEST_DEPOSIT_ADDRESS,
       swapInputs: {
-        destinationChain: "near",
         destinationAsset: "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
         destinationAddress: "alice.near",
         amountIn: "10500000",
@@ -1104,7 +1102,6 @@ describe("recoverInFlightSettlements", () => {
     return {
       depositAddress,
       swapInputs: {
-        destinationChain: "near",
         destinationAsset: "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
         destinationAddress: "alice.near",
         amountIn: "10500000",

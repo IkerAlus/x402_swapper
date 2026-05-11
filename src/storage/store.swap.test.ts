@@ -57,7 +57,6 @@ describe("SwapState round-trip — SqliteStateStore", () => {
 
     const original = mockSwapState({
       swapInputs: {
-        destinationChain: "near",
         destinationAsset: "nep141:usdc.near",
         destinationAddress: "alice.near",
         amountIn: "10000000",

@@ -239,7 +239,6 @@ describe("buildOpenApiDocument — GET query parameters", () => {
     expect(params.every((p) => p.in === "query")).toBe(true);
     const lookup = Object.fromEntries(params.map((p) => [p.name, p.required]));
     expect(lookup).toEqual({
-      destinationChain: true,
       destinationAsset: true,
       destinationAddress: true,
       amountIn: true,

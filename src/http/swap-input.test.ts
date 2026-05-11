@@ -19,7 +19,6 @@ import {
 
 function validInput() {
   return {
-    destinationChain: "near",
     destinationAsset: "nep141:usdc.near",
     destinationAddress: "alice.near",
     amountIn: "10000000",
@@ -56,7 +55,6 @@ describe("SwapRequestInputSchema — required fields", () => {
       const paths = result.error.issues.map((i) => i.path.join("."));
       expect(paths).toEqual(
         expect.arrayContaining([
-          "destinationChain",
           "destinationAsset",
           "destinationAddress",
           "amountIn",
@@ -106,15 +104,6 @@ describe("SwapRequestInputSchema — format gates that prevent fund-misrouting",
     expect(result.success).toBe(false);
   });
 
-  it("rejects destinationChain with uppercase characters", () => {
-    // Chain prefixes in NEP141_CHAIN_MAP are lowercase + hyphens. Enforcing
-    // here keeps the 402 envelope's `crossChain.destinationChain` consistent.
-    const result = SwapRequestInputSchema.safeParse({
-      ...validInput(),
-      destinationChain: "NEAR",
-    });
-    expect(result.success).toBe(false);
-  });
 });
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -126,7 +115,6 @@ describe("SwapRequestInputSchema — format gates that prevent fund-misrouting",
 describe("SwapRequestInputJsonSchema — Zod alignment", () => {
   it("declares the same required fields as Zod", () => {
     expect(SwapRequestInputJsonSchema.required).toEqual([
-      "destinationChain",
       "destinationAsset",
       "destinationAddress",
       "amountIn",
@@ -135,7 +123,6 @@ describe("SwapRequestInputJsonSchema — Zod alignment", () => {
 
   it("mirrors every Zod regex pattern verbatim", () => {
     const props = SwapRequestInputJsonSchema.properties as Record<string, Record<string, unknown>>;
-    expect((props.destinationChain as { pattern: string }).pattern).toBe("^[a-z0-9-]+$");
     expect((props.destinationAsset as { pattern: string }).pattern).toBe("^nep141:");
     expect((props.amountIn as { pattern: string }).pattern).toBe("^[1-9]\\d*$");
     expect((props.refundAddress as { pattern: string }).pattern).toBe("^0x[a-fA-F0-9]{40}$");

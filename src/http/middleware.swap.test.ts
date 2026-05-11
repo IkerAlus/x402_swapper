@@ -44,7 +44,6 @@ const SWAP_PATH = "/api/swap";
 
 function swapQuery(inputs: SwapRequestInput = mockSwapInputs()): Record<string, string> {
   const out: Record<string, string> = {
-    destinationChain: inputs.destinationChain,
     destinationAsset: inputs.destinationAsset,
     destinationAddress: inputs.destinationAddress,
     amountIn: inputs.amountIn,
@@ -92,7 +91,6 @@ describe("middleware swap-mode — 400 INVALID_INPUT envelope", () => {
     const paths = (res.body.details as Array<{ path: string }>).map((d) => d.path);
     expect(paths).toEqual(
       expect.arrayContaining([
-        "destinationChain",
         "destinationAsset",
         "destinationAddress",
         "amountIn",
@@ -121,14 +119,20 @@ describe("middleware swap-mode — InvalidInputError surfacing", () => {
     const res = await request(app)
       .get(SWAP_PATH)
       .query({
-        destinationChain: "arbitrum",
         destinationAsset: "nep141:arb-0xaf88d065e77c8cc2239327c5edb3a432268e5831.omft.near",
         destinationAddress: "alice.near",
         amountIn: "10000000",
       });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("INVALID_INPUT");
-    expect((res.body.details as string[]).join(" ")).toMatch(/EVM|arbitrum/i);
+    // details is the unified ErrorDetail[] discriminated union; for the
+    // chain-format mismatch path every entry has source: "buyer-format"
+    // and (in this case) path: "destinationAddress".
+    const details = res.body.details as Array<{ source: string; path?: string; message: string }>;
+    expect(details).toBeDefined();
+    expect(details.length).toBeGreaterThan(0);
+    expect(details.every((d) => d.source === "buyer-format")).toBe(true);
+    expect(details.map((d) => d.message).join(" ")).toMatch(/EVM|arbitrum/i);
   });
 
   it("does NOT reject unknown chain prefixes — request proceeds to 1CS (1CS may know chains we don't)", async () => {
@@ -136,7 +140,6 @@ describe("middleware swap-mode — InvalidInputError surfacing", () => {
     const res = await request(app)
       .get(SWAP_PATH)
       .query({
-        destinationChain: "futurechain",
         destinationAsset: "nep141:futurechain-0xabc.omft.near",
         destinationAddress: "alice.near",
         amountIn: "10000000",
@@ -156,7 +159,6 @@ describe("middleware swap-mode — query-string carriage", () => {
     const res = await request(app)
       .get(SWAP_PATH)
       .query({
-        destinationChain: "base",
         destinationAsset: longAsset,
         destinationAddress: "0x1234567890abcdef1234567890abcdef12345678",
         amountIn: "10000000",

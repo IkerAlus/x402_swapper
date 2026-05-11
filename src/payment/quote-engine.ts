@@ -43,7 +43,7 @@ import {
   InvalidInputError,
   GatewayError,
 } from "../types.js";
-import type { ErrorContext } from "../types.js";
+import type { ErrorContext, ErrorDetail } from "../types.js";
 import {
   EVM_CHAIN_PREFIXES,
   NON_EVM_CHAIN_PREFIXES,
@@ -99,10 +99,9 @@ export const defaultQuoteFn: QuoteFn = (request) =>
  * @param inputs       Buyer-supplied destination params from the parsed query string.
  * @param quoteFn      Injectable quote function (defaults to real 1CS SDK call).
  *
- * @throws {InvalidInputError}       Buyer's destination/recipient combination is malformed (400)
- * @throws {QuoteUnavailableError}   1CS returned 400 (bad asset pair, etc.) (503)
+ * @throws {InvalidInputError}       Buyer's destination/recipient combination is malformed, OR 1CS rejected the quote (400) with a buyer-actionable upstream message
  * @throws {AuthenticationError}     1CS returned 401 (JWT expired/invalid) (503)
- * @throws {ServiceUnavailableError} 1CS returned 5xx or network error (503)
+ * @throws {ServiceUnavailableError} 1CS returned 5xx, an unmappable 400, or a network error (503)
  * @throws {DeadlineTooShortError}   Quote deadline leaves < quoteExpiryBufferSec (503)
  */
 export async function buildPaymentRequirements(
@@ -123,7 +122,7 @@ export async function buildPaymentRequirements(
   // ── 3. Build + send the quote request ─────────────────────────────
   const deadline = buildQuoteDeadline(cfg);
   const quoteRequest = buildSwapQuoteRequest(cfg, inputs, deadline);
-  const quoteResponse = await requestQuote(quoteRequest, quoteFn);
+  const quoteResponse = await requestQuote(quoteRequest, inputs, quoteFn);
 
   // ── 4. Validate the response ──────────────────────────────────────
   const depositAddress = quoteResponse.quote.depositAddress;
@@ -287,36 +286,44 @@ export function validateBuyerDestination(inputs: SwapRequestInput): void {
   const prefix = extractChainPrefix(destinationAsset);
   const isEvmRecipient = /^0x[a-fA-F0-9]{40}$/.test(destinationAddress);
 
-  const reasons: string[] = [];
+  const reasons: ErrorDetail[] = [];
 
   if (prefix !== null && EVM_CHAIN_PREFIXES.includes(prefix)) {
     if (!isEvmRecipient) {
-      reasons.push(
-        `destinationAddress "${destinationAddress}" is not an EVM address (0x + 40 hex) but destinationAsset targets ${prefix}`,
-      );
+      reasons.push({
+        source: "buyer-format",
+        path: "destinationAddress",
+        message: `destinationAddress "${destinationAddress}" is not an EVM address (0x + 40 hex) but destinationAsset targets ${prefix}`,
+      });
     }
   } else if (prefix !== null && NON_EVM_CHAIN_PREFIXES.includes(prefix)) {
     if (isEvmRecipient) {
-      reasons.push(
-        `destinationAddress "${destinationAddress}" looks like an EVM address but destinationAsset targets ${prefix}`,
-      );
+      reasons.push({
+        source: "buyer-format",
+        path: "destinationAddress",
+        message: `destinationAddress "${destinationAddress}" looks like an EVM address but destinationAsset targets ${prefix}`,
+      });
     }
   } else if (isNearNativeAsset(destinationAsset)) {
     if (isEvmRecipient) {
-      reasons.push(
-        `destinationAddress "${destinationAddress}" looks like an EVM address but destinationAsset is NEAR-native`,
-      );
+      reasons.push({
+        source: "buyer-format",
+        path: "destinationAddress",
+        message: `destinationAddress "${destinationAddress}" looks like an EVM address but destinationAsset is NEAR-native`,
+      });
     } else if (!isValidNearAccount(destinationAddress)) {
-      reasons.push(
-        `destinationAddress "${destinationAddress}" is not a valid NEAR account ('.near'/'.tg' suffix or 64-char implicit)`,
-      );
+      reasons.push({
+        source: "buyer-format",
+        path: "destinationAddress",
+        message: `destinationAddress "${destinationAddress}" is not a valid NEAR account ('.near'/'.tg' suffix or 64-char implicit)`,
+      });
     }
   }
   // Unknown prefix → let 1CS validate; we don't reject what we don't understand.
 
   if (reasons.length > 0) {
     throw new InvalidInputError(
-      `Buyer destination format mismatch: ${reasons.join("; ")}`,
+      `Buyer destination format mismatch: ${reasons.map((r) => r.message).join("; ")}`,
       { reasons, destinationAsset, destinationAddress },
     );
   }
@@ -329,9 +336,23 @@ export function validateBuyerDestination(inputs: SwapRequestInput): void {
  * diagnosis hints) so operators can tell a recipient typo from a transient
  * upstream outage without grepping multiple logs. The client-facing path
  * never sees this context — it's consumed only by `logServerError`.
+ *
+ * **1CS 400 splitting**: a 400 from 1CS means "the request was malformed",
+ * but who's at fault depends on which field was rejected. Buyer-controlled
+ * fields (`tokenOut`/`recipient`/`amount` and `refundTo` when the buyer
+ * supplied `refundAddress`) → 400 `INVALID_INPUT` with the upstream message
+ * promoted to `details[]`. Operator-controlled fields (`tokenIn`/`originAsset`
+ * and `refundTo` when falling back to `GATEWAY_REFUND_ADDRESS`) → 503
+ * `SERVICE_UNAVAILABLE`. Unknown → 400 with a `gateway-hint` listing the
+ * most-likely buyer-side candidates: HTTP 400 from upstream means our
+ * outbound request was rejected as malformed, and that's almost always
+ * caused by buyer input (account doesn't exist, asset not listed, amount
+ * below minimum). The hint tells the buyer to retry once before changing
+ * the request, so a rare transient 1CS issue isn't silently buried.
  */
 async function requestQuote(
   quoteRequest: Parameters<typeof OneClickService.getQuote>[0],
+  inputs: SwapRequestInput,
   quoteFn: QuoteFn,
 ): Promise<QuoteResponse> {
   try {
@@ -344,27 +365,54 @@ async function requestQuote(
       throw err;
     }
     if (err instanceof OneClickApiError) {
+      const upstreamMessage = extractErrorMessage(err);
       const ctx = buildQuoteDiagnosticContext(quoteRequest, err.status);
+      // Attach upstreamMessage to the context bag so the InvalidInputError
+      // arm of handleError can surface it in `details[]` without exposing
+      // the rest of the context (request fields, hints).
+      ctx.upstreamMessage = upstreamMessage;
       switch (err.status) {
-        case 400:
-          throw new QuoteUnavailableError(
-            `1CS quote rejected (400): ${extractErrorMessage(err)}`,
+        case 400: {
+          const source = classify1csQuote400Source(upstreamMessage, inputs);
+          if (source === "operator") {
+            // Buyer can't fix this — surface as 503 so they don't waste
+            // time editing their (correct) query. Operator must act.
+            throw new ServiceUnavailableError(
+              `1CS quote rejected (400, operator): ${upstreamMessage}`,
+              ctx,
+            );
+          }
+          // source === "buyer" OR "unknown" — both route to 400. For
+          // "unknown", attach a synthetic gateway-hint listing the
+          // most-likely candidates so the buyer has somewhere to start.
+          if (source === "unknown") {
+            ctx.gatewayHints = [
+              "1CS did not name a specific field. Common causes (most likely first): " +
+                "destinationAddress doesn't exist on the destination chain; " +
+                "destinationAsset isn't listed by 1CS; " +
+                "amountIn is below the trading-pair's minimum. " +
+                "Less commonly: a transient upstream issue — retry once before changing the request.",
+            ];
+          }
+          throw new InvalidInputError(
+            `1CS quote rejected (400, ${source}): ${upstreamMessage}`,
             ctx,
           );
+        }
         case 401:
           throw new AuthenticationError(
-            `1CS authentication failed (401): ${extractErrorMessage(err)}`,
+            `1CS authentication failed (401): ${upstreamMessage}`,
             ctx,
           );
         default:
           if (err.status >= 500) {
             throw new ServiceUnavailableError(
-              `1CS service error (${err.status}): ${extractErrorMessage(err)}`,
+              `1CS service error (${err.status}): ${upstreamMessage}`,
               ctx,
             );
           }
-          throw new QuoteUnavailableError(
-            `1CS unexpected error (${err.status}): ${extractErrorMessage(err)}`,
+          throw new ServiceUnavailableError(
+            `1CS unexpected error (${err.status}): ${upstreamMessage}`,
             ctx,
           );
       }
@@ -375,6 +423,53 @@ async function requestQuote(
       buildQuoteDiagnosticContext(quoteRequest, "network"),
     );
   }
+}
+
+/**
+ * Classify a 1CS 400 quote-rejection message as buyer-fault vs operator-fault.
+ *
+ * Used by {@link requestQuote} to route the rejection to the right HTTP status:
+ *   - `buyer`    → 400 INVALID_INPUT (buyer can fix by editing their query)
+ *   - `operator` → 503 SERVICE_UNAVAILABLE (operator must fix config)
+ *   - `unknown`  → 503 (conservative; we can't tell)
+ *
+ * Pattern matching against 1CS's unversioned error wording. If 1CS renames
+ * fields in a future release, unmapped cases fall through to `unknown` →
+ * 503, which is the safest default. Operators will see the actual upstream
+ * message in their server logs (via the context bag) and can update the
+ * patterns accordingly.
+ *
+ * Exported for unit tests only — not part of the public module API.
+ */
+export type Quote400Source = "buyer" | "operator" | "unknown";
+
+export function classify1csQuote400Source(
+  upstreamMessage: string,
+  inputs: SwapRequestInput,
+): Quote400Source {
+  const m = upstreamMessage.toLowerCase();
+
+  // Buyer-controlled fields
+  if (/\btokenout\b|destinationasset|destinationtoken/.test(m)) return "buyer";
+  if (/\brecipient\b/.test(m)) return "buyer";
+  if (
+    /\bamount\b.*(min|max|too small|too large|too big|exceed|below|above)|(min|max|too small|too large|too big|exceed|below|above).*\bamount\b/.test(
+      m,
+    )
+  ) {
+    return "buyer";
+  }
+
+  // refundTo: buyer-fault iff the buyer supplied refundAddress; otherwise
+  // we're falling back to GATEWAY_REFUND_ADDRESS (operator config).
+  if (/\brefundto\b|refundaddress/.test(m)) {
+    return inputs.refundAddress ? "buyer" : "operator";
+  }
+
+  // Operator-controlled fields
+  if (/\btokenin\b|originasset|origintoken/.test(m)) return "operator";
+
+  return "unknown";
 }
 
 /**

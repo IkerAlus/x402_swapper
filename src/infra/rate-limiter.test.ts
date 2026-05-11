@@ -45,7 +45,6 @@ function createMockQuoteFn(inputs: SwapRequestInput = mockSwapInputs()): QuoteFn
 /** Build the buyer's query string for the swap route from a SwapRequestInput. */
 function swapQuery(inputs: SwapRequestInput = mockSwapInputs()): Record<string, string> {
   const out: Record<string, string> = {
-    destinationChain: inputs.destinationChain,
     destinationAsset: inputs.destinationAsset,
     destinationAddress: inputs.destinationAddress,
     amountIn: inputs.amountIn,

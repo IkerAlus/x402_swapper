@@ -43,6 +43,7 @@ import type {
   SwapState,
 } from "../types.js";
 import { GatewayError, InvalidInputError } from "../types.js";
+import type { ErrorDetail } from "../types.js";
 import { buildPaymentRequirements } from "../payment/quote-engine.js";
 import type { QuoteFn } from "../payment/quote-engine.js";
 import { verifyPayment } from "../payment/verifier.js";
@@ -337,7 +338,8 @@ function parseAndValidateInputs(
 ): SwapRequestInput | null {
   const parsed = deps.route.inputValidator.safeParse(req.query);
   if (!parsed.success) {
-    const details = parsed.error.issues.map((issue) => ({
+    const details: ErrorDetail[] = parsed.error.issues.map((issue) => ({
+      source: "buyer-zod" as const,
       path: issue.path.join("."),
       message: issue.message,
     }));
@@ -545,13 +547,37 @@ function handleError(res: Response, err: unknown): void {
   logServerError(correlationId, res.req, err);
 
   if (err instanceof InvalidInputError) {
-    const reasons = Array.isArray(err.context?.reasons)
-      ? (err.context.reasons as string[])
-      : undefined;
+    const details: ErrorDetail[] = [];
+    // Pre-quote chain-format failures from validateBuyerDestination.
+    if (Array.isArray(err.context?.reasons)) {
+      details.push(...(err.context.reasons as ErrorDetail[]));
+    }
+    // 1CS-rejected quote with a buyer-actionable upstream message
+    // (classify1csQuote400Source ⇒ "buyer" OR "unknown"). The narrow
+    // upstreamMessage string is the only piece of the upstream context
+    // bag that's safe to surface; the rest (request fields, hints used
+    // for operator logs) stays server-side only.
+    if (typeof err.context?.upstreamMessage === "string") {
+      details.push({
+        source: "upstream",
+        message: err.context.upstreamMessage,
+      });
+    }
+    // gateway-authored diagnostic hints (currently produced when the 1CS
+    // 400 message can't be classified — see quote-engine.ts requestQuote).
+    // Safe to surface: these strings are authored by the gateway, not by
+    // upstream and not derived from buyer input.
+    if (Array.isArray(err.context?.gatewayHints)) {
+      for (const hint of err.context.gatewayHints as string[]) {
+        if (typeof hint === "string" && hint.length > 0) {
+          details.push({ source: "gateway-hint", message: hint });
+        }
+      }
+    }
     res.status(err.httpStatus).json({
       error: err.code,
       message: clientMessageFor(err),
-      details: reasons,
+      details: details.length > 0 ? details : undefined,
       correlationId,
     });
     return;

@@ -46,13 +46,13 @@ import {
 // ═══════════════════════════════════════════════════════════════════════
 
 const BUYER_INPUTS = {
-  /** Chain prefix the buyer wants to receive on. */
-  destinationChain: "near",
-
-  /** 1CS NEP-141 asset ID. Examples below. */
+  /**
+   * 1CS NEP-141 asset ID. The destination chain is derived from the
+   * asset's prefix (e.g. `nep141:arb-...` → Arbitrum). Examples below.
+   */
   destinationAsset:
     "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
-  // EVM examples (uncomment + adjust to match `destinationChain`):
+  // EVM examples:
   //   "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1", // USDT on Near
   //  "nep141:arb-0xaf88d065e77c8cc2239327c5edb3a432268e5831.omft.near"   // USDC on Arbitrum
   //   "nep141:eth-0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48.omft.near"   // USDC on Ethereum
@@ -66,7 +66,7 @@ const BUYER_INPUTS = {
   destinationAddress: "ikeralus.near", // ← REPLACE with an account YOU control
 
   /** Origin amount the buyer pays, in USDC smallest unit (6 decimals on Base). */
-  amountIn: "75000", // 
+  amountIn: "15000", // 
 
   /**
    * Optional: refund target if 1CS fails the swap. Strongly recommended —
@@ -96,7 +96,6 @@ const DRY_RUN = process.env.DRY_RUN !== "false"; // Default: dry run
 
 // Build the query record from BUYER_INPUTS, omitting refundAddress when null.
 const SWAP_QUERY: Record<string, string> = {
-  destinationChain: BUYER_INPUTS.destinationChain,
   destinationAsset: BUYER_INPUTS.destinationAsset,
   destinationAddress: BUYER_INPUTS.destinationAddress,
   amountIn: BUYER_INPUTS.amountIn,
@@ -196,6 +195,42 @@ function buildUrl(path: string, query: Record<string, string>): string {
   return `${GATEWAY_URL}${path}${path.includes("?") ? "&" : "?"}${qs}`;
 }
 
+/**
+ * Pretty-print the gateway's error envelope (parsed JSON when possible,
+ * raw text as fallback). Surfaces the discriminated `details[]` entries
+ * so a buyer can tell whether the failure is Zod-shape, chain-format, or
+ * an upstream 1CS rejection.
+ */
+async function printGatewayErrorBody(res: Response, header: string): Promise<void> {
+  console.error(`  ❌ ${header} (status ${res.status}):`);
+  const raw = await res.text();
+  let body: {
+    error?: string;
+    message?: string;
+    details?: Array<{ source?: string; path?: string; message?: string }>;
+    correlationId?: string;
+  };
+  try {
+    body = JSON.parse(raw);
+  } catch {
+    console.error(`     (non-JSON body): ${raw}`);
+    return;
+  }
+  if (body.error) console.error(`     error:         ${body.error}`);
+  if (body.message) console.error(`     message:       ${body.message}`);
+  if (Array.isArray(body.details) && body.details.length > 0) {
+    console.error(`     details:`);
+    for (const d of body.details) {
+      const src = d.source ? `(${d.source})` : "(?)";
+      const path = d.path ? ` [${d.path}]` : "";
+      console.error(`       ${src}${path} ${d.message ?? ""}`);
+    }
+  }
+  if (body.correlationId) {
+    console.error(`     correlationId: ${body.correlationId}  (quote when reporting to operator)`);
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 // Main
 // ═══════════════════════════════════════════════════════════════════════
@@ -226,17 +261,12 @@ async function main(): Promise<void> {
   console.log(`  Status: ${initialRes.status}`);
 
   if (initialRes.status === 400) {
-    const body = await initialRes.text();
-    console.error(`  ❌ 400 INVALID_INPUT — buyer query failed validation:`);
-    console.error(`     ${body}`);
+    await printGatewayErrorBody(initialRes, "400 INVALID_INPUT — buyer query failed validation");
     process.exit(1);
   }
 
   if (initialRes.status !== 402) {
-    console.error(
-      `  ❌ Expected 402, got ${initialRes.status}. Body:`,
-      await initialRes.text(),
-    );
+    await printGatewayErrorBody(initialRes, `Expected 402, got ${initialRes.status}`);
     process.exit(1);
   }
 

@@ -11,6 +11,7 @@ import {
   validateDeadline,
   toQuoteResponseRecord,
   diagnoseQuoteRequest,
+  classify1csQuote400Source,
 } from "./quote-engine.js";
 import type { QuoteFn } from "./quote-engine.js";
 import {
@@ -240,15 +241,17 @@ describe("validateBuyerDestination", () => {
       throw new Error("should have thrown");
     } catch (err) {
       expect(err).toBeInstanceOf(InvalidInputError);
-      const reasons = (err as InvalidInputError).context?.reasons;
-      expect(Array.isArray(reasons) && (reasons as string[]).length > 0).toBe(true);
+      // reasons is now ErrorDetail[] — typed discriminated union with source: "buyer-format"
+      const reasons = (err as InvalidInputError).context?.reasons as Array<{ source: string; path?: string; message: string }> | undefined;
+      expect(Array.isArray(reasons) && reasons.length > 0).toBe(true);
+      expect(reasons!.every((r) => r.source === "buyer-format")).toBe(true);
+      expect(reasons!.every((r) => typeof r.message === "string" && r.message.length > 0)).toBe(true);
     }
   });
 
   it("passes through unknown chain prefixes (1CS may know chains we don't)", () => {
     expect(() =>
       validateBuyerDestination(testInputs({
-        destinationChain: "futurechain",
         destinationAsset: "nep141:futurechain-0xabc.omft.near",
         destinationAddress: "alice.near",
       })),
@@ -466,18 +469,27 @@ describe("buildPaymentRequirements", () => {
     ).rejects.toThrow(/invalid amountIn/);
   });
 
+  // 1CS 400 is now split by upstream-message classification:
+  //   buyer-fault (tokenOut/recipient/amount/buyer-refund) → InvalidInputError (400)
+  //   operator-fault (tokenIn/originAsset/operator-refund) → ServiceUnavailableError (503)
+  //   unknown → InvalidInputError (400) + a gateway-hint (HTTP 400 from
+  //     upstream means OUR outbound request was rejected as malformed,
+  //     statistically buyer-input; hint lists the likely candidates).
+  // 401 and 5xx are unchanged.
   it.each([
-    [400, QuoteUnavailableError],
-    [401, AuthenticationError],
-    [503, ServiceUnavailableError],
-  ] as const)("maps 1CS %i to the corresponding gateway error", async (status, ErrorClass) => {
+    ["buyer-fault 400 (tokenOut)", 400, { message: "tokenOut is not valid" }, InvalidInputError],
+    ["operator-fault 400 (tokenIn)", 400, { message: "tokenIn is not valid" }, ServiceUnavailableError],
+    ["unknown 400 (vague)", 400, { message: "Internal server error" }, InvalidInputError],
+    ["401", 401, { message: "Unauthorized" }, AuthenticationError],
+    ["503", 503, { message: "Bad Gateway" }, ServiceUnavailableError],
+  ] as const)("maps 1CS %s to the corresponding gateway error", async (_label, status, body, ErrorClass) => {
     await expect(
       buildPaymentRequirements(
         testConfig(),
         makeMockStore(),
         "/api/swap",
         testInputs(),
-        failingQuoteFn(status, { message: "upstream" }),
+        failingQuoteFn(status, body),
       ),
     ).rejects.toThrow(ErrorClass);
   });
@@ -489,22 +501,124 @@ describe("buildPaymentRequirements", () => {
     ).rejects.toThrow(ServiceUnavailableError);
   });
 
-  it("attaches diagnostic context (upstreamStatus + recipient + destinationAsset) on 1CS errors", async () => {
+  it("attaches diagnostic context (upstreamStatus + upstreamMessage + recipient + destinationAsset) on 1CS errors", async () => {
     try {
       await buildPaymentRequirements(
         testConfig(),
         makeMockStore(),
         "/api/swap",
         testInputs(),
-        failingQuoteFn(400),
+        failingQuoteFn(400, { message: "tokenIn is not valid" }), // operator-fault → 503
       );
       throw new Error("should have thrown");
     } catch (err) {
-      const ctx = (err as QuoteUnavailableError).context;
+      const ctx = (err as ServiceUnavailableError).context;
       expect(ctx?.upstreamStatus).toBe(400);
+      expect(ctx?.upstreamMessage).toBe("tokenIn is not valid");
       expect(ctx?.recipient).toBeDefined();
       expect(ctx?.destinationAsset).toBeDefined();
     }
+  });
+
+  it("buyer-fault 400 carries upstreamMessage in InvalidInputError context (promoted to details by middleware)", async () => {
+    try {
+      await buildPaymentRequirements(
+        testConfig(),
+        makeMockStore(),
+        "/api/swap",
+        testInputs(),
+        failingQuoteFn(400, { message: "tokenOut is not valid" }),
+      );
+      throw new Error("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(InvalidInputError);
+      const ctx = (err as InvalidInputError).context;
+      expect(ctx?.upstreamMessage).toBe("tokenOut is not valid");
+      // No gateway-hint on buyer-fault: classifier identified the field,
+      // upstream message is self-explanatory ("tokenOut is not valid").
+      expect(ctx?.gatewayHints).toBeUndefined();
+    }
+  });
+
+  it("unknown 400 (vague upstream message) carries gatewayHints + upstreamMessage in InvalidInputError context", async () => {
+    try {
+      await buildPaymentRequirements(
+        testConfig(),
+        makeMockStore(),
+        "/api/swap",
+        testInputs(),
+        failingQuoteFn(400, { message: "Internal server error" }),
+      );
+      throw new Error("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(InvalidInputError);
+      const ctx = (err as InvalidInputError).context;
+      expect(ctx?.upstreamMessage).toBe("Internal server error");
+      const hints = ctx?.gatewayHints as string[] | undefined;
+      expect(Array.isArray(hints) && hints.length > 0).toBe(true);
+      // Hint must mention the most-likely candidates so the buyer has
+      // actionable advice even when 1CS's message is opaque.
+      const joined = hints!.join(" ");
+      expect(joined).toMatch(/destinationAddress/i);
+      expect(joined).toMatch(/destinationAsset/i);
+      expect(joined).toMatch(/amountIn/i);
+      // ... and mention the rare-transient possibility so a real 1CS
+      // outage isn't silently misdiagnosed as buyer input.
+      expect(joined).toMatch(/retry|transient/i);
+    }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// classify1csQuote400Source — routes a 1CS 400 to the right HTTP status
+// based on which field 1CS named in its rejection message. Buyer-fault
+// → 400 INVALID_INPUT; operator-fault or unknown → 503 (conservative).
+// ═══════════════════════════════════════════════════════════════════════
+
+describe("classify1csQuote400Source", () => {
+  const inputs = testInputs();
+  const inputsWithRefund = testInputs({ refundAddress: "0xBuyerRefund" } as Partial<SwapRequestInput>);
+
+  it.each([
+    // Buyer-controlled — destinationAsset / tokenOut
+    ["tokenOut", "tokenOut is not valid"],
+    ["tokenOut case-insensitive", "TokenOut is not valid"],
+    ["destinationAsset wording", "destinationAsset not supported"],
+    ["destinationToken wording", "destinationToken not found"],
+    // Buyer-controlled — recipient
+    ["recipient", "recipient must be a valid NEAR account"],
+    // Buyer-controlled — amount min/max
+    ["amount too small", "amount is too small (min: 1000000)"],
+    ["amount below min", "amount below minimum quoting threshold"],
+    ["amount exceeds max", "amount exceeds maximum"],
+    ["min amount mention", "min amount is 1000000 for this pair"],
+  ])("classifies %s as buyer-fault", (_label, msg) => {
+    expect(classify1csQuote400Source(msg, inputs)).toBe("buyer");
+  });
+
+  it.each([
+    ["tokenIn", "tokenIn is not valid"],
+    ["originAsset wording", "originAsset not supported"],
+    ["originToken wording", "originToken not found"],
+  ])("classifies %s as operator-fault", (_label, msg) => {
+    expect(classify1csQuote400Source(msg, inputs)).toBe("operator");
+  });
+
+  it("classifies vague / unrecognised messages as unknown (→ 503 by caller)", () => {
+    expect(classify1csQuote400Source("request rejected", inputs)).toBe("unknown");
+    expect(classify1csQuote400Source("invalid request", inputs)).toBe("unknown");
+    expect(classify1csQuote400Source("", inputs)).toBe("unknown");
+  });
+
+  describe("refundTo branching by buyer-supplied refundAddress", () => {
+    it("buyer-fault when buyer supplied refundAddress (refundTo rejection is their typo)", () => {
+      expect(classify1csQuote400Source("refundTo is not valid", inputsWithRefund)).toBe("buyer");
+      expect(classify1csQuote400Source("invalid refundAddress format", inputsWithRefund)).toBe("buyer");
+    });
+
+    it("operator-fault when buyer omitted refundAddress (refundTo = GATEWAY_REFUND_ADDRESS, operator config)", () => {
+      expect(classify1csQuote400Source("refundTo is not valid", inputs)).toBe("operator");
+    });
   });
 });
 

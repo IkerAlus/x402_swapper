@@ -3,7 +3,7 @@
 **An x402-gated cross-chain swap service.** Buyers pay USDC on Base; the gateway routes funds via [NEAR Intents 1Click Swap](https://docs.near-intents.org) to any of 32+ destination chains (EVM, NEAR, Solana, Stellar, Bitcoin, …) at a buyer-supplied address. One signed EIP-3009 authorization per swap. No wallet-connect dance, no operator-side custody, x402-discoverable.
 
 ```
-GET /api/swap?destinationChain=near&destinationAsset=...&destinationAddress=alice.near&amountIn=10000000
+GET /api/swap?destinationAsset=...&destinationAddress=alice.near&amountIn=10000000
    │
    ▼ 402 + PAYMENT-REQUIRED  (deposit address + amount)
    │
@@ -195,7 +195,7 @@ You should see:
     GET /api/swap              — Cross-chain swap (x402)
 
   To test the 402 flow:
-    curl -i http://localhost:3402/api/swap?destinationChain=near&destinationAsset=nep141:...&destinationAddress=alice.near&amountIn=10000000
+    curl -i http://localhost:3402/api/swap?destinationAsset=nep141:...&destinationAddress=alice.near&amountIn=10000000
 ═══════════════════════════════════════════════════════
 ```
 
@@ -210,7 +210,7 @@ If env vars are missing or malformed, the gateway exits with a Zod validation er
 curl -i http://localhost:3402/api/swap
 
 # Valid query → 402 + PAYMENT-REQUIRED header
-curl -i 'http://localhost:3402/api/swap?destinationChain=near&destinationAsset=nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1&destinationAddress=alice.near&amountIn=10000000'
+curl -i 'http://localhost:3402/api/swap?destinationAsset=nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1&destinationAddress=alice.near&amountIn=10000000'
 ```
 
 The 402 response carries a base64-encoded `PAYMENT-REQUIRED` header. Decode it to see the deposit address, the amount (exactly your `amountIn` — the operator fee is deducted from the swap output, not added on top), and the `extra.crossChain` metadata block (quote ID, expected destination amount, refund target, operator fee breakdown).
@@ -252,12 +252,11 @@ npm run lint
 
 ## Buyer query format
 
-The buyer sends `GET /api/swap?...` with five fields:
+The buyer sends `GET /api/swap?...` with four fields:
 
 | Param | Required | Format | Meaning |
 |---|---|---|---|
-| `destinationChain` | yes | lowercase chain prefix (`near`, `arbitrum`, `solana`, …) | Display label echoed in the receipt |
-| `destinationAsset` | yes | `nep141:...` (1CS NEP-141 asset ID) | What the buyer wants to receive |
+| `destinationAsset` | yes | `nep141:...` (1CS NEP-141 asset ID) | What the buyer wants to receive. The destination chain is **derived** from the asset's prefix (e.g. `nep141:arb-...` → Arbitrum) |
 | `destinationAddress` | yes | chain-specific (NEAR account, EVM `0x…`, Stellar `G…`, etc.) | Where to send it |
 | `amountIn` | yes | digit-only positive integer (smallest unit) | What the buyer pays in `ORIGIN_ASSET_IN` |
 | `refundAddress` | no | EVM address | Refund target if 1CS swap fails. Defaults to `cfg.gatewayRefundAddress` |
@@ -270,18 +269,18 @@ Unknown chain prefixes pass through (1CS may know chains we don't); the destinat
 
 ## Destination chain examples
 
-The buyer can target **any of the 32+ chains supported by the 1CS API** (see https://docs.near-intents.org/resources/asset-support). Some common ones:
+The buyer can target **any of the 32+ chains supported by the 1CS API** (see https://docs.near-intents.org/resources/asset-support). The chain is picked by the `destinationAsset` prefix — buyers don't pass a separate chain field. Some common assets:
 
-| Chain | `destinationChain` | `destinationAsset` | `destinationAddress` format |
-|-------|-------------------|---------------------|----------------------------|
-| **NEAR** | `near` | `nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1` | NEAR account (`alice.near`) or 64-char hex |
-| **Arbitrum** | `arbitrum` | `nep141:arb-0xaf88d065e77c8cc2239327c5edb3a432268e5831.omft.near` | EVM `0x...` |
-| **Ethereum** | `ethereum` | `nep141:eth-0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48.omft.near` | EVM `0x...` |
-| **Polygon** | `polygon` | `nep141:polygon-0x3c499c542cef5e3811e1192ce70d8cc03d5c3359.omft.near` | EVM `0x...` |
-| **Optimism** | `optimism` | `nep141:op-0x0b2c639c533813f4aa9d7837caf62653d097ff85.omft.near` | EVM `0x...` |
-| **Solana** | `solana` | `nep141:solana-...omft.near` | Solana public key |
-| **Stellar** | `stellar` | `nep141:stellar-...omft.near` | Stellar `G...` (must have a USDC trustline) |
-| **Bitcoin** | `bitcoin` | `nep141:bitcoin-...omft.near` | Bitcoin address |
+| Chain (derived) | `destinationAsset` | `destinationAddress` format |
+|-------|---------------------|----------------------------|
+| **NEAR** | `nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1` | NEAR account (`alice.near`) or 64-char hex |
+| **Arbitrum** | `nep141:arb-0xaf88d065e77c8cc2239327c5edb3a432268e5831.omft.near` | EVM `0x...` |
+| **Ethereum** | `nep141:eth-0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48.omft.near` | EVM `0x...` |
+| **Polygon** | `nep141:polygon-0x3c499c542cef5e3811e1192ce70d8cc03d5c3359.omft.near` | EVM `0x...` |
+| **Optimism** | `nep141:op-0x0b2c639c533813f4aa9d7837caf62653d097ff85.omft.near` | EVM `0x...` |
+| **Solana** | `nep141:solana-...omft.near` | Solana public key |
+| **Stellar** | `nep141:stellar-...omft.near` | Stellar `G...` (must have a USDC trustline) |
+| **Bitcoin** | `nep141:bitcoin-...omft.near` | Bitcoin address |
 
 ---
 

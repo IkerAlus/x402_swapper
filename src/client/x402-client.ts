@@ -28,7 +28,6 @@
  *
  * const result = await client.payAndFetch(wallet, "/api/swap", {
  *   query: {
- *     destinationChain: "near",
  *     destinationAsset: "nep141:...",
  *     destinationAddress: "alice.near",
  *     amountIn: "10000000",
