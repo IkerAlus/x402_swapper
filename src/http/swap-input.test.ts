@@ -84,14 +84,38 @@ describe("SwapRequestInputSchema — format gates that prevent fund-misrouting",
     expect(result.success).toBe(false);
   });
 
-  it("rejects destinationAsset without nep141: prefix", () => {
-    // 1CS expects NEP-141 canonical IDs. Accepting "usdc.near" alone would
-    // surface as a 1CS 400, but later — costing a real upstream call.
+  // The destinationAsset gate is intentionally permissive (any
+  // `<identifier>:<body>` shape) to forward-compat with 1CS namespace
+  // additions. We only reject structurally-bogus shapes that 1CS would
+  // never accept regardless.
+  it.each([
+    ["bare token name (no namespace prefix)", "usdc.near"],
+    ["empty string", ""],
+    ["prefix with empty body", "nep141:"],
+    ["uppercase prefix (catches `NEP141:` typo)", "NEP141:foo"],
+    ["leading punctuation", ":nep141:foo"],
+  ])("rejects destinationAsset that is %s", (_label, value) => {
     const result = SwapRequestInputSchema.safeParse({
       ...validInput(),
-      destinationAsset: "usdc.near",
+      destinationAsset: value,
     });
     expect(result.success).toBe(false);
+  });
+
+  // The three asset-ID prefixes 1CS currently emits in production
+  // (verified at https://1click.chaindefuser.com/v0/tokens 2026-05).
+  // Adding a new prefix at 1CS should not require a gateway code change.
+  it.each([
+    ["nep141 native NEAR", "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1"],
+    ["nep141 OMFT bridge", "nep141:arb-0xaf88d065e77c8cc2239327c5edb3a432268e5831.omft.near"],
+    ["nep245 multi-token", "nep245:v2_1.omni.hot.tg:56_11111111111111111111"],
+    ["1cs_v1 Solana SPL", "1cs_v1:sol:spl:A7bdiYdS5GjqGFtxf17ppRHtDKPkkRqbKtR27dxvQXaS"],
+  ])("accepts %s asset IDs", (_label, value) => {
+    const result = SwapRequestInputSchema.safeParse({
+      ...validInput(),
+      destinationAsset: value,
+    });
+    expect(result.success).toBe(true);
   });
 
   it("rejects refundAddress in non-EVM format", () => {
@@ -123,7 +147,7 @@ describe("SwapRequestInputJsonSchema — Zod alignment", () => {
 
   it("mirrors every Zod regex pattern verbatim", () => {
     const props = SwapRequestInputJsonSchema.properties as Record<string, Record<string, unknown>>;
-    expect((props.destinationAsset as { pattern: string }).pattern).toBe("^nep141:");
+    expect((props.destinationAsset as { pattern: string }).pattern).toBe("^[a-z0-9][a-z0-9_]*:.+$");
     expect((props.amountIn as { pattern: string }).pattern).toBe("^[1-9]\\d*$");
     expect((props.refundAddress as { pattern: string }).pattern).toBe("^0x[a-fA-F0-9]{40}$");
   });

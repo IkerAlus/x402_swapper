@@ -21,6 +21,22 @@
  * and every consumer (`config`, `quote-engine`, `settler`) pick it up
  * automatically.
  */
+/**
+ * Alias map from `1cs_v1:` chain codes to {@link NEP141_CHAIN_MAP} keys.
+ *
+ * 1CS's newer `1cs_v1:<chain>:<token-standard>:<address>` asset IDs use
+ * short chain codes (e.g. `sol` for Solana) that differ from the
+ * full-name keys in `NEP141_CHAIN_MAP` (e.g. `solana`). This map
+ * translates them so both asset-ID formats resolve to the same canonical
+ * destination chain. Codes that already match a `NEP141_CHAIN_MAP` key
+ * (e.g. `eth`, `arb`, `bsc`) don't need an entry — they pass through.
+ *
+ * Verified against https://1click.chaindefuser.com/v0/tokens.
+ */
+export const ONE_CS_V1_CHAIN_ALIASES: Readonly<Record<string, string>> = Object.freeze({
+  sol: "solana",
+});
+
 export const NEP141_CHAIN_MAP: Readonly<Record<string, string>> = Object.freeze({
   // EVM chains (values must begin with "eip155:" for the partition below to pick them up)
   eth: "eip155:1",

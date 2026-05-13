@@ -916,6 +916,32 @@ describe("extractDestinationChain", () => {
     expect(extractDestinationChain("eip155:8453")).toBe("eip155");
     expect(extractDestinationChain("eip155:1")).toBe("eip155");
   });
+
+  // The newer `1cs_v1:<chain>:<token-standard>:<address>` format used by
+  // 1CS for SPL/ERC-20 tokens emitted in the v0/tokens catalogue.
+  describe("1cs_v1 asset IDs", () => {
+    it("extracts canonical chain via the sol→solana alias", () => {
+      expect(
+        extractDestinationChain("1cs_v1:sol:spl:A7bdiYdS5GjqGFtxf17ppRHtDKPkkRqbKtR27dxvQXaS"),
+      ).toBe("solana:mainnet");
+    });
+
+    it("extracts canonical chain when the 1cs_v1 code matches NEP141_CHAIN_MAP directly", () => {
+      // `eth`, `arb`, `bsc` are keys in NEP141_CHAIN_MAP — no alias needed
+      expect(extractDestinationChain("1cs_v1:eth:erc20:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48")).toBe("eip155:1");
+      expect(extractDestinationChain("1cs_v1:arb:erc20:0xaf88d065e77c8cc2239327c5edb3a432268e5831")).toBe("eip155:42161");
+    });
+
+    it("falls through to raw chain code for unknown 1cs_v1 chains (graceful degradation)", () => {
+      expect(extractDestinationChain("1cs_v1:newchain:fmt:0xabc")).toBe("newchain");
+    });
+
+    it("returns '1cs_v1' when the body lacks an inner colon (malformed)", () => {
+      // Should never happen in practice (1CS always emits at least
+      // `1cs_v1:<chain>:<rest>`) but guard against truncated inputs.
+      expect(extractDestinationChain("1cs_v1:sol")).toBe("1cs_v1");
+    });
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════════

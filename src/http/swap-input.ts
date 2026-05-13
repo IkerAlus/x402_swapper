@@ -25,7 +25,16 @@ export const SwapRequestInputSchema: z.ZodType<SwapRequestInput> = z.object({
   destinationAsset: z
     .string()
     .min(1, "destinationAsset is required")
-    .regex(/^nep141:/, "destinationAsset must be a NEP-141 asset ID (start with 'nep141:')"),
+    // 1CS uses several asset-ID prefixes in production: `nep141:`, `nep245:`,
+    // and the newer `1cs_v1:` (e.g. `1cs_v1:sol:spl:<mint>`). Accept any
+    // lowercase identifier followed by `:` and a non-empty body — same
+    // "unknown prefixes pass through to 1CS" philosophy as the chain-prefix
+    // logic. Catches typos like `Nep141:` or empty bodies while staying
+    // forward-compatible with future 1CS namespaces.
+    .regex(
+      /^[a-z0-9][a-z0-9_]*:.+$/,
+      "destinationAsset must be a 1CS asset ID (e.g. 'nep141:...', 'nep245:...', '1cs_v1:...')",
+    ),
   destinationAddress: z.string().min(1, "destinationAddress is required"),
   amountIn: z
     .string()
@@ -52,8 +61,8 @@ export const SwapRequestInputJsonSchema: Record<string, unknown> = {
   properties: {
     destinationAsset: {
       type: "string",
-      pattern: "^nep141:",
-      description: "1CS NEP-141 asset ID the buyer wants to receive (e.g. 'nep141:...'). The destination chain is derived from the asset's prefix.",
+      pattern: "^[a-z0-9][a-z0-9_]*:.+$",
+      description: "1CS asset ID the buyer wants to receive. Production formats: 'nep141:...' (NEP-141), 'nep245:...' (NEP-245 multi-token), and '1cs_v1:<chain>:<token-standard>:<address>' (e.g. '1cs_v1:sol:spl:A7bdi...'). The destination chain is derived from the asset's prefix; unknown prefixes pass through to 1CS for validation.",
     },
     destinationAddress: {
       type: "string",

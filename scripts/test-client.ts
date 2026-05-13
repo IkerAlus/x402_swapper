@@ -51,7 +51,7 @@ const BUYER_INPUTS = {
    * asset's prefix (e.g. `nep141:arb-...` → Arbitrum). Examples below.
    */
   destinationAsset:
-    "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
+    "nep141:sol-c800a4bd850783ccb82c2b2c7e84175443606352.omft.near",
   // EVM examples:
   //   "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1", // USDT on Near
   //  "nep141:arb-0xaf88d065e77c8cc2239327c5edb3a432268e5831.omft.near"   // USDC on Arbitrum
@@ -59,14 +59,14 @@ const BUYER_INPUTS = {
   //   "nep141:polygon-0x3c499c542cef5e3811e1192ce70d8cc03d5c3359.omft.near" // USDC on Polygon
   //   "nep141:op-0x0b2c639c533813f4aa9d7837caf62653d097ff85.omft.near"   // USDC on Optimism
   // Non-EVM examples:
-  //   "nep141:solana-EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v.omft.near" // USDC on Solana
+  //   "nep141:sol-c800a4bd850783ccb82c2b2c7e84175443606352.omft.near" // USDC on Solana
   //   "nep141:stellar-GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN.omft.near" // USDC on Stellar
 
   /** Recipient on the destination chain. Format must match the chain. */
-  destinationAddress: "ikeralus.near", // ← REPLACE with an account YOU control
+  destinationAddress: "3B5r4Y1zBe4m9nFBgzUJGXY7nX4dwMY4bAgTDGsCzs4F", // ← REPLACE with an account YOU control
 
   /** Origin amount the buyer pays, in USDC smallest unit (6 decimals on Base). */
-  amountIn: "15000", // 
+  amountIn: "299900", // 
 
   /**
    * Optional: refund target if 1CS fails the swap. Strongly recommended —

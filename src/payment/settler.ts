@@ -44,7 +44,7 @@ import {
   GatewayError,
 } from "../types.js";
 import { extractSignatureFromAuth } from "./verifier.js";
-import { NEP141_CHAIN_MAP } from "./chain-prefixes.js";
+import { NEP141_CHAIN_MAP, ONE_CS_V1_CHAIN_ALIASES } from "./chain-prefixes.js";
 
 // ═══════════════════════════════════════════════════════════════════════
 // Per-call timeout utility
@@ -1161,7 +1161,10 @@ async function failSwap(
 /**
  * Extract the destination chain from a 1CS asset ID.
  *
- * Handles short-form, CAIP-2, and NEP-141 canonical formats:
+ * Handles short-form, CAIP-2, NEP-141 canonical, NEP-245 multi-token,
+ * and the newer `1cs_v1:` format. Falls through to graceful raw-prefix
+ * return on anything unrecognised so new 1CS namespaces work without a
+ * code change (just with less-pretty chain identifiers).
  *
  * **Short-form:**
  *   - `"near:nUSDC"`              → `"near"`
@@ -1187,6 +1190,19 @@ async function failSwap(
  * **NEP-141 native NEAR:**
  *   - `"nep141:usdc.near"`                           → `"near"`
  *   - `"nep141:17208628f84f5d6ad33f0da3bbbeb27f..."` → `"near"`
+ *
+ * **1cs_v1 (`1cs_v1:<chain>:<token-standard>:<address>`):**
+ *   - `"1cs_v1:sol:spl:A7bdi..."`            → `"solana:mainnet"`
+ *   - `"1cs_v1:eth:erc20:0xa0b8..."`         → `"eip155:1"`
+ *   - `"1cs_v1:newchain:fmt:..."` (unknown) → `"newchain"`
+ *
+ * **NEP-245 (multi-token, e.g. HOT bridge):**
+ *   - The chain is encoded inside the third colon-separated segment in
+ *     bridge-specific ways (e.g. `nep245:v2_1.omni.hot.tg:56_...` carries
+ *     the EVM chain id `56` as the token-id prefix). Returns `"nep245"`
+ *     for now — a buyer's input asset already documents the chain, so
+ *     this only affects receipt aesthetics. Improve when a concrete use
+ *     case lands.
  */
 export function extractDestinationChain(assetId: string): string {
   const colonIndex = assetId.indexOf(":");
@@ -1212,6 +1228,20 @@ export function extractDestinationChain(assetId: string): string {
     if (rest.endsWith(".near")) return "near";
     if (rest.endsWith(".testnet")) return "near-testnet";
     return "near";
+  }
+
+  if (prefix === "1cs_v1") {
+    // Format: "1cs_v1:<chain>:<token-standard>:<address>" — extract the
+    // second colon-segment as the chain code. Translate via the alias
+    // map (e.g. `sol` → `solana`) then look up in NEP141_CHAIN_MAP for
+    // the canonical CAIP-2/identifier. Unknown codes fall through raw.
+    const innerColon = rest.indexOf(":");
+    if (innerColon <= 0) return prefix;
+    const chainCode = rest.substring(0, innerColon);
+    const aliased = ONE_CS_V1_CHAIN_ALIASES[chainCode] ?? chainCode;
+    const mapped = NEP141_CHAIN_MAP[aliased];
+    if (mapped) return mapped;
+    return aliased;
   }
 
   return prefix;
