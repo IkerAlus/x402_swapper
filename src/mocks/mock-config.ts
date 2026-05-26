@@ -111,6 +111,10 @@ export function mockGatewayConfig(
     gatewayRefundAddress: FACILITATOR_ADDRESS,
     operatorMarginBps: 30,           // 0.3% — service-default
     operatorFeeRecipient: "operator.near", // Required by D16 when bps > 0
+    // Persistence + shutdown (TODO #2 + #3): in-memory store, defaults for
+    // the intervals. Tests that exercise file persistence override storeFilePath.
+    storeSaveIntervalMs: 30_000,
+    shutdownGraceMs: 30_000,
     maxPollTimeMs: 300_000,          // 5 minutes
     pollIntervalBaseMs: 2_000,       // 2 seconds
     pollIntervalMaxMs: 30_000,       // 30 seconds

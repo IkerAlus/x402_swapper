@@ -16,6 +16,7 @@
  */
 
 import initSqlJs, { type Database } from "sql.js";
+import * as fs from "node:fs";
 import type { StateStore, SwapState, SwapPhase } from "../types.js";
 import { VALID_PHASE_TRANSITIONS } from "../types.js";
 
@@ -64,16 +65,14 @@ export class SqliteStateStore implements StateStore {
     const SQL = await initSqlJs();
 
     if (this.options.filePath) {
-      // If a file path is provided, try to load existing data
-      try {
-        const fs = await import("fs");
-        if (fs.existsSync(this.options.filePath)) {
-          const fileBuffer = fs.readFileSync(this.options.filePath);
-          this.db = new SQL.Database(fileBuffer);
-        } else {
-          this.db = new SQL.Database();
-        }
-      } catch {
+      // Load existing file if present; fall through to fresh DB otherwise.
+      // We deliberately don't catch — a permissions error / unreadable file
+      // is an operator-config bug they need to know about at boot time,
+      // not a silent fall-through to a fresh in-memory DB.
+      if (fs.existsSync(this.options.filePath)) {
+        const fileBuffer = fs.readFileSync(this.options.filePath);
+        this.db = new SQL.Database(fileBuffer);
+      } else {
         this.db = new SQL.Database();
       }
     } else {
@@ -384,16 +383,29 @@ export class SqliteStateStore implements StateStore {
     return this.db;
   }
 
+  /**
+   * Write the in-memory SQLite database out to {@link options.filePath}.
+   *
+   * Errors are logged but NOT thrown: this runs from a setInterval callback
+   * (the periodic flush) and from `close()`. If we threw, an unhandled
+   * rejection would crash the process — and a disk-full or permissions
+   * issue at flush time isn't a reason to abandon in-memory state that's
+   * still serving requests fine. We log loudly so operators can see the
+   * problem and fix the disk / permissions before the next restart wipes
+   * the data.
+   */
   private flushToDisk(): void {
     if (!this.db || !this.options.filePath) return;
     try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const fs = require("fs") as typeof import("fs");
       const data = this.db.export();
       fs.writeFileSync(this.options.filePath, Buffer.from(data));
       this.dirty = false;
-    } catch {
-      // Log error in production; for now silently continue
+    } catch (err) {
+      console.error(
+        `[x402-1CS] ⚠️  State-store flush to ${this.options.filePath} failed — ` +
+          `in-memory state is intact but unsaved. ` +
+          `Error: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 }

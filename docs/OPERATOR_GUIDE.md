@@ -184,9 +184,9 @@ Before you point real buyers at the gateway:
 
 1. **TLS / HTTPS** — the `PAYMENT-SIGNATURE` header carries an EIP-712 authorization. Plaintext HTTP is replayable. Terminate TLS at a reverse proxy (nginx, Caddy, Cloudflare) or self-host with `https`. **Blocker** — see [TODO #1](TODO.md).
 
-2. **File-based state persistence** — the in-memory SQLite default loses every in-flight settlement on crash or deploy. Set `STORE_FILE_PATH` (and `STORE_SAVE_INTERVAL_MS` if you want periodic flushing). **Blocker** — see [TODO #2](TODO.md).
+2. **File-based state persistence** — the in-memory SQLite default loses every in-flight settlement on crash or deploy. **Set `STORE_FILE_PATH`** to a writable absolute path (e.g. `/var/lib/x402-swapper/state.db`). The store flushes every `STORE_SAVE_INTERVAL_MS` (default 30 s) AND on graceful shutdown. ✅ implemented — see `.env.example`. D12 stale-DB check refuses to boot if the file was written by the predecessor merchant-mode codebase (see "First boot" above).
 
-3. **Graceful shutdown** — current behavior force-kills after 1 second. A POLLING settlement (5 min budget) gets cut off mid-way. Track in-flight settlements and wait for completion before exiting. **Blocker** — see [TODO #3](TODO.md).
+3. **Graceful shutdown** — on SIGTERM/SIGINT the server stops accepting new connections, then waits up to `SHUTDOWN_GRACE_MS` (default 30 s) for `SettlementLimiter.current` to drop to 0 before tearing down the store and providers. Surviving settlements are recovered on next start. Align this with your orchestration's stop-grace (k8s `terminationGracePeriodSeconds`, systemd `TimeoutStopSec`). On clean drain → exit 0; on timeout → exit 1 (operators can alert off non-zero exits). ✅ implemented.
 
 4. **Legal opinion** — see the regulatory section above. Don't skip this for a public deployment. **Blocker** — see [TODO #4](TODO.md).
 

@@ -129,6 +129,9 @@ There are **no merchant-side fields** — buyers supply destination per-request 
 | Field | Default | Notes |
 |-------|---------|-------|
 | `OPERATOR_MARGIN_BPS` | `30` (0.3%) | Operator fee in basis points. Range `0`–`500` (1CS rejects appFees above 5%). 1CS deducts this from the swap (via `appFees`) and credits `OPERATOR_FEE_RECIPIENT` on NEAR Intents. Surfaced in `extra.crossChain.operatorFee`. `0` disables the fee entirely. |
+| `STORE_FILE_PATH` | unset (in-memory) | Path to the SQLite file backing the swap-state store. Leave unset for development; set for any real deployment to survive crashes/deploys. D12 stale-DB fail-fast applies — see [docs/OPERATOR_GUIDE.md](docs/OPERATOR_GUIDE.md) § "First boot". |
+| `STORE_SAVE_INTERVAL_MS` | `30000` (30 s) | How often the SQLite snapshot is flushed to disk. Only used when `STORE_FILE_PATH` is set. Also flushes on graceful shutdown. |
+| `SHUTDOWN_GRACE_MS` | `30000` (30 s) | On SIGTERM/SIGINT, max wait for in-flight settlements to drain before forcing exit. Align with your k8s `terminationGracePeriodSeconds` / systemd `TimeoutStopSec`. |
 | `ALLOWED_ORIGINS` | unset (reflect any) | CORS allowlist for browser clients |
 | `PUBLIC_BASE_URL` | unset | Required before registering on x402scan |
 | `OWNERSHIP_PROOFS` | empty | Comma-separated EIP-191 proofs (use `npx tsx scripts/generate-ownership-proof.ts`) |

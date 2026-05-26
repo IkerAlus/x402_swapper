@@ -26,6 +26,7 @@ import {
 import { createX402Middleware } from "./http/middleware.js";
 import type { MiddlewareDeps } from "./http/middleware.js";
 import { createRateLimiting, destroyRateLimiting } from "./infra/rate-limiter.js";
+import { waitForSettlementsToFinish } from "./infra/shutdown.js";
 import { buildProtectedRoutes } from "./http/protected-routes.js";
 import { buildWellKnownDocument } from "./http/discovery.js";
 import { buildOpenApiDocument } from "./http/openapi.js";
@@ -53,8 +54,26 @@ async function main(): Promise<void> {
   );
 
   // ── 2. Initialize state store ──────────────────────────────────────
-  const store = await createStateStore({ backend: "sqlite" });
-  console.log("[x402-1CS] State store initialized (SQLite in-memory)");
+  //
+  // Default is in-memory (suitable for development); set STORE_FILE_PATH
+  // for crash-safe persistence in any real deployment. The D12 stale-DB
+  // fail-fast triggers when the existing file lacks `swapInputs` — see
+  // docs/OPERATOR_GUIDE.md § "First boot".
+  const store = await createStateStore({
+    backend: "sqlite",
+    filePath: cfg.storeFilePath,
+    saveIntervalMs: cfg.storeSaveIntervalMs,
+  });
+  if (cfg.storeFilePath) {
+    console.log(
+      `[x402-1CS] State store initialized (SQLite, file=${cfg.storeFilePath}, ` +
+        `flush every ${cfg.storeSaveIntervalMs}ms)`,
+    );
+  } else {
+    console.log(
+      "[x402-1CS] State store initialized (SQLite in-memory — set STORE_FILE_PATH for crash-safe persistence)",
+    );
+  }
 
   // ── 3. Set up provider pool ────────────────────────────────────────
   const providerPool = new ProviderPool(cfg.originRpcUrls);
@@ -268,30 +287,77 @@ async function main(): Promise<void> {
   });
 
   // ── Graceful shutdown ──────────────────────────────────────────────
+  //
+  // On SIGTERM/SIGINT:
+  //   1. Stop accepting new HTTP connections (server.close).
+  //   2. Wait up to `cfg.shutdownGraceMs` for in-flight settlements to
+  //      finish — a settlement in POLLING can take minutes. Without this
+  //      wait the buyer's on-chain transfer would land but the gateway
+  //      would forget about it (TODO #3).
+  //   3. Tear down rate-limiter timers, flush + close the state store,
+  //      destroy RPC providers.
+  //   4. Exit cleanly (exit 0 if drained, exit 1 if we forced through).
   let shuttingDown = false;
   const shutdown = async () => {
     if (shuttingDown) return; // Prevent double-shutdown on repeated Ctrl+C
     shuttingDown = true;
 
-    console.log("\n[x402-1CS] Shutting down...");
-
-    // 1. Stop accepting new HTTP connections
+    console.log("\n[x402-1CS] Shutting down — stopping new connections...");
     server.close();
 
-    // 2. Clean up background timers (rate limiter sweeps, quote GC)
+    // Wait for in-flight settlements to drain.
+    const inFlight = rateLimiting.settlementLimiter.current;
+    if (inFlight > 0) {
+      console.log(
+        `[x402-1CS] Waiting up to ${cfg.shutdownGraceMs}ms for ${inFlight} ` +
+          `in-flight settlement(s) to finish...`,
+      );
+    }
+    // Throttle progress logs to once every ~5 s so SIGTERM logs don't spam.
+    let lastLog = 0;
+    const result = await waitForSettlementsToFinish(
+      rateLimiting.settlementLimiter,
+      cfg.shutdownGraceMs,
+      250,
+      (current, elapsedMs) => {
+        if (elapsedMs - lastLog >= 5_000) {
+          console.log(
+            `[x402-1CS]   ${current} settlement(s) still in flight (${Math.round(elapsedMs / 1000)}s elapsed)...`,
+          );
+          lastLog = elapsedMs;
+        }
+      },
+    );
+    if (result.status === "drained") {
+      console.log(
+        `[x402-1CS] All settlements drained in ${result.waitedMs}ms.`,
+      );
+    } else {
+      console.warn(
+        `[x402-1CS] ⚠️  Shutdown grace period expired with ${result.finalCount} ` +
+          `settlement(s) still in flight after ${result.waitedMs}ms. ` +
+          `Their state will be recovered on next start.`,
+      );
+    }
+
+    // Clean up background timers (rate limiter sweeps, quote GC).
     destroyRateLimiting(rateLimiting);
 
-    // 3. Close state store (clears saveTimer, flushes pending writes, closes DB)
+    // Close state store (clears saveTimer, flushes pending writes, closes DB).
     await store.close();
 
-    // 4. Destroy RPC providers (close WebSocket/HTTP connections)
+    // Destroy RPC providers (close WebSocket/HTTP connections).
     providerPool.destroy();
 
     console.log("[x402-1CS] Cleanup complete.");
 
-    // 5. Force exit after a brief grace period as a safety net
-    //    (in case in-flight settlements or other async work keeps the loop alive)
-    setTimeout(() => process.exit(0), 1000).unref();
+    // Exit 0 on clean drain, 1 on forced shutdown (operators / orchestrators
+    // can wire alerts off non-zero exits). Without an explicit process.exit
+    // the runtime would exit naturally with code 143 (SIGTERM) and our
+    // intended code would be lost. The exit must run on a fresh tick so any
+    // already-scheduled console.log writes flush first.
+    const exitCode = result.status === "drained" ? 0 : 1;
+    setImmediate(() => process.exit(exitCode));
   };
   process.on("SIGINT", () => void shutdown());
   process.on("SIGTERM", () => void shutdown());

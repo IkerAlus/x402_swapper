@@ -82,6 +82,38 @@ export const GatewayConfigSchema = z.object({
    */
   operatorFeeRecipient: z.string().optional(),
 
+  // ── State store (persistence) ──────────────────────────────────────
+  /**
+   * Path to the SQLite file that backs the swap-state store. When unset
+   * (the default) the store runs in-memory and every in-flight settlement
+   * is lost on crash or deploy — only safe for development. For any
+   * deployment touching real funds set this to a writable absolute path
+   * (e.g. `/var/lib/x402-swapper/state.db`).
+   *
+   * The D12 stale-DB fail-fast triggers when this file exists and was
+   * written by the predecessor merchant-mode codebase — see
+   * `docs/OPERATOR_GUIDE.md` § "First boot".
+   */
+  storeFilePath: z.string().min(1).optional(),
+  /**
+   * How often (ms) the SQLite-backed store flushes its in-memory copy to
+   * `storeFilePath`. Only honored when `storeFilePath` is set. The store
+   * also flushes on graceful shutdown via `close()`, so this knob trades
+   * crash-recovery freshness against I/O cost. Default 30 s.
+   */
+  storeSaveIntervalMs: z.number().int().positive().default(30_000),
+
+  // ── Shutdown ───────────────────────────────────────────────────────
+  /**
+   * On SIGTERM/SIGINT, how long (ms) the server waits for in-flight
+   * settlements (`SettlementLimiter.current`) to drain before forcing
+   * exit. A settlement in `POLLING` can take up to `maxPollTimeMs`, so
+   * align this with your deploy/orchestration timeouts (kubernetes
+   * `terminationGracePeriodSeconds`, systemd `TimeoutStopSec`, etc.).
+   * Default 30 s.
+   */
+  shutdownGraceMs: z.number().int().positive().default(30_000),
+
   // ── Tuning ─────────────────────────────────────────────────────────
   /** Maximum wall-clock time (ms) spent polling 1CS for a terminal status. */
   maxPollTimeMs: z.number().int().positive().default(300_000),
@@ -192,6 +224,11 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv = process.env): Gateway
     gatewayRefundAddress: env.GATEWAY_REFUND_ADDRESS,
     operatorMarginBps: env.OPERATOR_MARGIN_BPS ? Number(env.OPERATOR_MARGIN_BPS) : undefined,
     operatorFeeRecipient: orUndef(env.OPERATOR_FEE_RECIPIENT),
+    storeFilePath: orUndef(env.STORE_FILE_PATH),
+    storeSaveIntervalMs: env.STORE_SAVE_INTERVAL_MS
+      ? Number(env.STORE_SAVE_INTERVAL_MS)
+      : undefined,
+    shutdownGraceMs: env.SHUTDOWN_GRACE_MS ? Number(env.SHUTDOWN_GRACE_MS) : undefined,
     maxPollTimeMs: env.MAX_POLL_TIME_MS ? Number(env.MAX_POLL_TIME_MS) : undefined,
     pollIntervalBaseMs: env.POLL_INTERVAL_BASE_MS ? Number(env.POLL_INTERVAL_BASE_MS) : undefined,
     pollIntervalMaxMs: env.POLL_INTERVAL_MAX_MS ? Number(env.POLL_INTERVAL_MAX_MS) : undefined,

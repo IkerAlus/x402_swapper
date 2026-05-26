@@ -1,7 +1,7 @@
 # x402-1CS Swap Service — Production Readiness TODO
 
-**Date:** 2026-05-07 (post swap-as-resource pivot)
-**Test suite status:** 375 passing | 10 skipped (live-only, JWT-gated) — typecheck clean
+**Last touched:** 2026-05-13 (TODO #2 + #3 landed)
+**Test suite status:** 434 passing | 13 skipped (live-only, JWT-gated) — typecheck clean
 **Target:** prototype deployment for a small set of users / agents
 
 ---
@@ -29,12 +29,27 @@
 
 ---
 
-## Recently Completed — swap-as-resource pivot (2026-05-07)
+## Recently Completed
+
+### 2026-05-13 — Persistence + graceful shutdown (TODO #2, #3)
+
+Closed two of the four go-live blockers — both code-local and ~3 hrs combined.
+
+- **File-based state persistence** — new `STORE_FILE_PATH` and `STORE_SAVE_INTERVAL_MS` env vars wired through `src/infra/config.ts` → `createStateStore` in `src/server.ts`. Default stays in-memory (dev-friendly); production deployments set `STORE_FILE_PATH` to survive crashes/deploys. D12 stale-DB fail-fast already covered the upgrade-from-merchant-mode case.
+- **Graceful shutdown** — new `SHUTDOWN_GRACE_MS` (default 30 s) drives a wait loop on `SettlementLimiter.current` before tearing down the store/providers. New `src/infra/shutdown.ts` houses the testable `waitForSettlementsToFinish(counter, graceMs)` helper (9 unit tests covering drain, timeout, validation, structural typing). Exit code now reflects outcome — 0 on clean drain, 1 on forced shutdown.
+- **Test suite**: 416 → 434 passing.
+- **Docs**: `.env.example`, README optional-fields table, OPERATOR_GUIDE operational checklist all updated.
+
+### 2026-05-11 — Buyer-input error UX (TODO non-blocker)
+
+Buyer-facing error envelope rewritten — see commits `044e405` (structured `ErrorDetail[]` discriminated union: `buyer-zod` / `buyer-format` / `upstream` / `gateway-hint`) and `6307e31` (Zod regex relaxed to accept all 1CS asset-ID prefixes including `1cs_v1:`). 1CS 400s now route by message classification: buyer-fault → 400, operator-fault → 503, unknown → 400 with a gateway-hint listing likely candidates.
+
+### 2026-05-07 — Swap-as-resource pivot
 
 The codebase pivoted from a single-merchant payment gateway to a swap-as-resource service. Every settlement now routes funds to a buyer-supplied destination address rather than a pre-configured merchant. See [implementation_plan.md](../implementation_plan.md) for the full execution log; high-level deltas:
 
 - **Route registry collapsed to a single `GET /api/swap`** — `pricing.mode` discriminator removed (single product = single pricing shape).
-- **Per-request buyer inputs** (`destinationChain`, `destinationAsset`, `destinationAddress`, `amountIn`, optional `refundAddress`) replace the deleted `MERCHANT_*` env vars.
+- **Per-request buyer inputs** (`destinationAsset`, `destinationAddress`, `amountIn`, optional `refundAddress`) replace the deleted `MERCHANT_*` env vars. (Originally included a separate `destinationChain` field; removed 2026-05-11 as redundant — derived from the asset's prefix.)
 - **EXACT_INPUT semantics** — buyer signs for an exact `amountIn`; slippage upside lands on the buyer (vs the merchant predecessor's EXACT_OUTPUT).
 - **Operator margin in basis points** — new `OPERATOR_MARGIN_BPS` env var, surfaced transparently in `extra.crossChain.operatorFee` on every 402.
 - **Receipt in PAYMENT-RESPONSE header** (D14) — body is `{}`; the swap receipt (destination tx hashes, slippage, operator fee, formatted amounts) is carried via the standardized x402 `extensions` extensibility hook.
@@ -45,6 +60,8 @@ The codebase pivoted from a single-merchant payment gateway to a swap-as-resourc
 
 ## BLOCKERS — Must fix before any real user touches it
 
+> **Note on numbering**: IDs (#1, #4, ..., #19) are stable for cross-reference from code comments and `OPERATOR_GUIDE.md`. Gaps indicate items moved to "Recently Completed" — items #2 (file persistence) and #3 (graceful shutdown) closed 2026-05-13.
+
 ### 1. Add HTTPS / TLS termination
 
 **Risk:** Payment signatures (`PAYMENT-SIGNATURE` header) travel in plaintext over HTTP. Any network observer can intercept and replay them.
@@ -52,31 +69,6 @@ The codebase pivoted from a single-merchant payment gateway to a swap-as-resourc
 **Fix:** Terminate TLS via a reverse proxy (nginx, Caddy, Cloudflare Tunnel — recommended) or `https` self-host with a cert.
 
 **Files:** Infrastructure-level, or `src/server.ts` if self-hosted TLS.
-
----
-
-### 2. Enable file-based state persistence
-
-**Risk:** The default `SqliteStateStore` runs in-memory ([src/server.ts:56](../src/server.ts)). A crash or deploy wipes all swap states. Any settlement in `BROADCASTING` or `POLLING` phase is irrecoverable — the buyer's on-chain transfer happened but the gateway forgot about it.
-
-**Fix:**
-- Add `STORE_FILE_PATH` and `STORE_SAVE_INTERVAL_MS` env vars to [src/infra/config.ts](../src/infra/config.ts)
-- Pass them to `SqliteStateStore` constructor in [src/server.ts](../src/server.ts)
-- Document in `.env.example` and the operator guide
-- D12 fail-fast already triggers if a file from the merchant predecessor is loaded — no risk there
-
----
-
-### 3. Graceful shutdown — wait for in-flight settlements
-
-**Risk:** Current shutdown ([src/server.ts:284](../src/server.ts)) calls `server.close()` then `process.exit(0)` after a 1-second grace period. If a settlement is in `POLLING` (can take up to 5 min), the Node.js process exits mid-way, corrupting state. Buyer paid but funds may not reach destination.
-
-**Fix:** Track in-flight settlement count via `SettlementLimiter`. On SIGTERM:
-1. Stop accepting new requests (`server.close()` — already done)
-2. Poll the in-flight count; wait up to 30s for it to reach zero
-3. Run cleanup + exit
-
-**Files:** [src/server.ts](../src/server.ts), possibly [src/infra/rate-limiter.ts](../src/infra/rate-limiter.ts) (expose active count).
 
 ---
 
@@ -219,11 +211,11 @@ Currently, changing the facilitator private key requires a full service restart.
 ## Priority Roadmap
 
 ```
-Phase 1 — Go-live minimum (blockers 1-4)
-  ├── #1  TLS termination               (~30 min, infra)
-  ├── #2  File-based persistence        (~30 min)
-  ├── #3  Graceful shutdown (wait)      (~1-2 hrs)
-  └── #4  Regulatory / KYC posture      (legal review, days–weeks)
+Phase 1 — Go-live minimum
+  ├── #1  TLS termination               (~30 min, infra)         [OPEN]
+  ├── #2  File-based persistence        (~30 min)                [DONE 2026-05-13]
+  ├── #3  Graceful shutdown (wait)      (~1-2 hrs)               [DONE 2026-05-13]
+  └── #4  Regulatory / KYC posture      (legal review, days–weeks) [OPEN]
 
 Phase 2 — Stable prototype (items 5-10)
   ├── #5  RPC startup validation        (~20 min)

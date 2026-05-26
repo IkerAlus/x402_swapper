@@ -46,7 +46,12 @@ describe("GatewayConfigSchema", () => {
       tokenVersion: "2",
       tokenSupportsEip3009: true,
       operatorMarginBps: 30,
+      // Persistence + shutdown defaults (TODO #2 + #3): in-memory by default,
+      // 30 s flush interval if a file is set, 30 s shutdown grace.
+      storeSaveIntervalMs: 30_000,
+      shutdownGraceMs: 30_000,
     });
+    expect(cfg.storeFilePath).toBeUndefined();
   });
 
   it.each([
@@ -129,6 +134,48 @@ describe("GatewayConfigSchema", () => {
       expect(result.success).toBe(true);
     });
   });
+
+  // ── Persistence (TODO #2) and graceful shutdown (TODO #3) knobs ────
+  describe("storeFilePath / storeSaveIntervalMs / shutdownGraceMs", () => {
+    it("defaults: storeFilePath undefined (in-memory), saveInterval 30s, shutdownGrace 30s", () => {
+      const cfg = GatewayConfigSchema.parse(validSchemaInput());
+      expect(cfg.storeFilePath).toBeUndefined();
+      expect(cfg.storeSaveIntervalMs).toBe(30_000);
+      expect(cfg.shutdownGraceMs).toBe(30_000);
+    });
+
+    it("accepts a non-empty storeFilePath and overrides for the two intervals", () => {
+      const cfg = GatewayConfigSchema.parse({
+        ...validSchemaInput(),
+        storeFilePath: "/var/lib/x402-swapper/state.db",
+        storeSaveIntervalMs: 5_000,
+        shutdownGraceMs: 60_000,
+      });
+      expect(cfg.storeFilePath).toBe("/var/lib/x402-swapper/state.db");
+      expect(cfg.storeSaveIntervalMs).toBe(5_000);
+      expect(cfg.shutdownGraceMs).toBe(60_000);
+    });
+
+    it("rejects empty-string storeFilePath (should be undefined, not '')", () => {
+      // Empty strings are filtered to undefined by `orUndef` in loadConfigFromEnv
+      // — but if a programmatic caller passes "" directly, the schema must
+      // catch it. `.min(1)` enforces that.
+      expect(
+        GatewayConfigSchema.safeParse({ ...validSchemaInput(), storeFilePath: "" }).success,
+      ).toBe(false);
+    });
+
+    it.each([
+      ["storeSaveIntervalMs = 0", { storeSaveIntervalMs: 0 }],
+      ["storeSaveIntervalMs negative", { storeSaveIntervalMs: -1 }],
+      ["shutdownGraceMs = 0", { shutdownGraceMs: 0 }],
+      ["shutdownGraceMs negative", { shutdownGraceMs: -100 }],
+    ])("rejects %s (must be positive integer)", (_label, override) => {
+      expect(
+        GatewayConfigSchema.safeParse({ ...validSchemaInput(), ...override }).success,
+      ).toBe(false);
+    });
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -157,6 +204,28 @@ describe("loadConfigFromEnv", () => {
     expect(cfg.quoteExpiryBufferSec).toBe(60);
     expect(cfg.operatorMarginBps).toBe(50);
     expect(cfg.tokenSupportsEip3009).toBe(false);
+  });
+
+  it("maps STORE_FILE_PATH / STORE_SAVE_INTERVAL_MS / SHUTDOWN_GRACE_MS env vars (TODO #2 + #3)", () => {
+    const cfg = loadConfigFromEnv({
+      ...validEnv(),
+      STORE_FILE_PATH: "/var/lib/x402-swapper/state.db",
+      STORE_SAVE_INTERVAL_MS: "5000",
+      SHUTDOWN_GRACE_MS: "60000",
+    } as unknown as NodeJS.ProcessEnv);
+    expect(cfg.storeFilePath).toBe("/var/lib/x402-swapper/state.db");
+    expect(cfg.storeSaveIntervalMs).toBe(5_000);
+    expect(cfg.shutdownGraceMs).toBe(60_000);
+  });
+
+  it("treats empty STORE_FILE_PATH as 'unset' (falls back to in-memory)", () => {
+    // Regression: `STORE_FILE_PATH=` in a .env file becomes `""` in
+    // process.env; without `orUndef` it would fail Zod's `.min(1)`.
+    const cfg = loadConfigFromEnv({
+      ...validEnv(),
+      STORE_FILE_PATH: "",
+    } as unknown as NodeJS.ProcessEnv);
+    expect(cfg.storeFilePath).toBeUndefined();
   });
 
   it("throws on missing required env vars", () => {
