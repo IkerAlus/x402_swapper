@@ -164,7 +164,7 @@ Delete from the Zod schema and from `GatewayConfig`:
 Delete `validateRecipientFormat(cfg)` and the call site at the end of `loadConfigFromEnv()`. The merchant-recipient validation moves to per-request validation (Phase 4).
 
 Add to the schema:
-- `operatorMarginBps`: Zod `number().int().min(0).max(1000)` — basis points, 0–10%. Default `30` (0.3%).
+- `operatorMarginBps`: Zod `number().int().min(0).max(500)` — basis points, 0–5% (1CS appFees ceiling; 1CS rejects total appFees > 500 bps with HTTP 400, so the cap fails fast at startup rather than at first quote). Default `30` (0.3%). _Note: original Phase 2 plan said `.max(1000)`; reduced during Phase 14 after hitting the 1CS limit._
 - (Keep) `gatewayRefundAddress`: still useful as the fallback when the buyer omits `refundAddress`.
 
 Update tests in [src/infra/config.test.ts](src/infra/config.test.ts):
@@ -826,7 +826,7 @@ Total: **~21–25 hours** (3 focused workdays). Larger than the 13–18 hour sib
 
 # Phase 14 — Fix the operator-fee mechanism (use 1CS `appFees`)
 
-> **Status: Planned — 2026-05-07.** The fee architecture from Phases 1–13 is broken in the typical case: when the buyer supplies `refundAddress` (the recommended path), the operator earns nothing. This phase rebuilds the fee path on top of 1CS's first-class `appFees` mechanism.
+> **Status: Shipped — 2026-05-11.** The fee architecture from Phases 1–13 was broken in the typical case: when the buyer supplied `refundAddress` (the recommended path), the operator earned nothing. This phase rebuilt the fee path on top of 1CS's first-class `appFees` mechanism. See commits `ec4d92d` (Phase 14a–e core), `044e405` (Phase 14 follow-up — structured `ErrorDetail[]` UX), and `6307e31` (asset-ID Zod relaxation for `1cs_v1:` / `nep245:` prefixes).
 
 ## Context — what's wrong with the current implementation
 
@@ -1008,3 +1008,16 @@ If 1CS surfaces the realized appFee amount in `swapDetails` (need to confirm aga
 - Phase 14f (docs): ~1 hour
 
 Total: **~5 hours.**
+
+---
+
+## Post-Phase-14 work — not detailed here
+
+After Phase 14 shipped, several smaller refinements landed without dedicated phase write-ups (the cost of writing each one up would have exceeded the cost of the change itself). They live as ordinary commits on `main`; the live status board is in `docs/TODO.md` § "Recently Completed". Highlights:
+
+- **Dropped the buyer-input `destinationChain` field (~2026-05-11)** — fully redundant with `destinationAsset`'s NEP-141 prefix (`extractDestinationChain` already derives it for the receipt). Earlier phases (especially Phase 2 type defs and Phase 9 OpenAPI spec) reference `destinationChain` as a buyer input; that is now historical narrative. The current wire shape is documented in `docs/USER_GUIDE.md` and `src/http/swap-input.ts`.
+- **Structured error UX (commit `044e405`)** — 1CS 400s now route by message classification (buyer-fault → 400 `INVALID_INPUT`, operator-fault → 503 `SERVICE_UNAVAILABLE`, unknown → 400 + `gateway-hint`). The on-the-wire `details: ErrorDetail[]` discriminated union (`buyer-zod` / `buyer-format` / `upstream` / `gateway-hint`) is the buyer-facing contract.
+- **Asset-ID Zod relaxation (commit `6307e31`)** — accepts `1cs_v1:`, `nep245:`, and any future 1CS prefix, not just `nep141:`.
+- **TODO #2 + #3 (2026-05-13)** — `STORE_FILE_PATH` / `STORE_SAVE_INTERVAL_MS` for crash-safe persistence; `SHUTDOWN_GRACE_MS` + `src/infra/shutdown.ts` for graceful drain on SIGTERM. Two of four go-live blockers closed.
+
+For the canonical current state of any field or feature, the source files (`src/infra/config.ts`, `src/http/swap-input.ts`, `src/types.ts`) and the user-facing docs (`README.md`, `docs/USER_GUIDE.md`, `docs/OPERATOR_GUIDE.md`) are authoritative. This document remains a faithful record of how the codebase reached the end of Phase 14 in May 2026.

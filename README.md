@@ -70,8 +70,7 @@ x402_swapper/
 │   ├── TODO.md                       # Production-readiness checklist
 │   ├── USER_GUIDE.md                 # Buyer-facing usage guide
 │   ├── OPERATOR_GUIDE.md             # Operator regulatory + ops guide
-│   ├── Facilitator_keys_guidance.md  # Facilitator wallet key management
-│   └── X402SCAN_PLAN.md              # x402scan integration design notes (historical)
+│   └── Facilitator_keys_guidance.md  # Facilitator wallet key management
 ├── .env.example                      # Environment variable template
 ├── implementation_plan.md            # Swap-mode pivot execution log
 ├── SWAP_AS_RESOURCE.md               # Original product brief
@@ -238,10 +237,10 @@ The test client decodes the `PAYMENT-RESPONSE` header on success and prints the 
 ## 6. Run the test suite
 
 ```bash
-# Mocked tests (~375 tests, no API key needed) — finishes in ~2s
+# Mocked tests (~434 tests, no API key needed) — finishes in ~2s
 npm test
 
-# Live 1CS API tests (10 tests, gated by ONE_CLICK_JWT)
+# Live 1CS API tests (13 tests, gated by ONE_CLICK_JWT)
 ONE_CLICK_JWT="your-jwt" npm run test:live
 
 # Type check
@@ -320,7 +319,7 @@ GET /.well-known/x402     — Fan-out resource list + ownership proofs
 GET /health               — Operator-facing health check (in-flight settlements, RPC status)
 ```
 
-To register on [x402scan](https://www.x402scan.com/), set `PUBLIC_BASE_URL` and add ownership proofs (see [scripts/generate-ownership-proof.ts](scripts/generate-ownership-proof.ts)). Detailed integration notes: [docs/X402SCAN_PLAN.md](docs/X402SCAN_PLAN.md) (historical, predates the swap-mode pivot — the *integration shape* is unchanged but example payloads reference the merchant predecessor).
+To register on [x402scan](https://www.x402scan.com/), set `PUBLIC_BASE_URL` and add ownership proofs (see [scripts/generate-ownership-proof.ts](scripts/generate-ownership-proof.ts)). Operator-facing checklist items #11–12 in [docs/OPERATOR_GUIDE.md](docs/OPERATOR_GUIDE.md) cover registration and `/health` monitoring.
 
 ---
 
@@ -346,9 +345,8 @@ The differentiation versus existing bridges (LiFi / Across / Stargate / etc.) is
 | [docs/OPERATOR_GUIDE.md](docs/OPERATOR_GUIDE.md) | Operator-facing — regulatory considerations, KYC/sanctions/geofencing, refund flow, margin guidance, first boot |
 | [docs/Facilitator_keys_guidance.md](docs/Facilitator_keys_guidance.md) | Facilitator wallet key management |
 | [docs/TODO.md](docs/TODO.md) | Production-readiness checklist with priorities |
-| [docs/X402SCAN_PLAN.md](docs/X402SCAN_PLAN.md) | x402scan integration design notes (historical) |
-| [implementation_plan.md](implementation_plan.md) | Swap-mode pivot execution log |
-| [SWAP_AS_RESOURCE.md](SWAP_AS_RESOURCE.md) | Original product brief |
+| [implementation_plan.md](implementation_plan.md) | Swap-mode pivot execution log (Phases 1–14) |
+| [SWAP_AS_RESOURCE.md](SWAP_AS_RESOURCE.md) | Original product brief (historical, pre-pivot) |
 | [CLAUDE.local.md](CLAUDE.local.md) | AI agent onboarding guide (file map, design patterns, invariants) |
 
 ---

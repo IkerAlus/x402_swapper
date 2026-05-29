@@ -235,6 +235,5 @@ For production deployments, plan to migrate to structured logging (`pino`) — s
 | [docs/USER_GUIDE.md](USER_GUIDE.md) | Buyer-facing usage guide |
 | [docs/TODO.md](TODO.md) | Production-readiness checklist with priorities |
 | [docs/Facilitator_keys_guidance.md](Facilitator_keys_guidance.md) | Facilitator key management — read before using a real funded key |
-| [docs/X402SCAN_PLAN.md](X402SCAN_PLAN.md) | x402scan integration design notes (historical, predates the swap-mode pivot) |
 | [implementation_plan.md](../implementation_plan.md) | Swap-mode pivot execution log |
 | [SWAP_AS_RESOURCE.md](../SWAP_AS_RESOURCE.md) | Original product brief — particularly §5 (slippage, refund) and §6 (regulation) |

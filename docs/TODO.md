@@ -239,6 +239,5 @@ Phase 3 — Production hardening (items 11-19)
 | [docs/USER_GUIDE.md](USER_GUIDE.md) | Buyer-facing usage guide |
 | [docs/OPERATOR_GUIDE.md](OPERATOR_GUIDE.md) | Operator-facing regulatory + ops guide |
 | [docs/Facilitator_keys_guidance.md](Facilitator_keys_guidance.md) | Facilitator wallet key management |
-| [docs/X402SCAN_PLAN.md](X402SCAN_PLAN.md) | x402scan integration design notes (historical, predates swap-mode pivot) |
-| [implementation_plan.md](../implementation_plan.md) | Swap-mode pivot execution log (Phases 1–13) |
+| [implementation_plan.md](../implementation_plan.md) | Swap-mode pivot execution log (Phases 1–14) |
 | [SWAP_AS_RESOURCE.md](../SWAP_AS_RESOURCE.md) | Original product brief (preserved as historical context) |
