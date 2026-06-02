@@ -383,24 +383,40 @@ function buildOperation(
 
 /**
  * Translate the registry's `RoutePricing` into the x402scan-compatible
- * `x-payment-info` block.
+ * `x-payment-info` block, per [DISCOVERY.md § A]
+ * (https://github.com/Merit-Systems/x402scan/blob/main/docs/DISCOVERY.md).
  *
- * Output shape: `{ protocols: "x402", mode: "swap", currency, min, max,
- * operatorMarginBps }`. The `operatorMarginBps` value comes from the
- * service-level config (not per-route) since this is a single-product
- * service; surfacing it here lets x402scan and integrators see the
- * markup the operator charges without probing a live 402.
+ * Wire shape:
+ * ```json
+ * {
+ *   "protocols": ["x402"],
+ *   "price": { "mode": "dynamic", "currency": "USD", "min": "0.01", "max": "100000" },
+ *   "operatorMarginBps": 30
+ * }
+ * ```
+ *
+ * Notes:
+ * - `protocols` is the spec-mandated **array** form (spec writes it ambiguously as `"x402"` but all
+ *   adjacent examples in the x402scan repo use the array shape — emit the array for safety).
+ * - `mode` is `"dynamic"`, not `"swap"` — the spec only blesses `"fixed"` and `"dynamic"`. Our
+ *   swap-quote pricing IS dynamic (live 1CS quote bounded by `min`/`max`), so this is honest.
+ * - `operatorMarginBps` is a gateway-specific extension kept as a sibling of `price` (not inside it)
+ *   so it's clearly not a DISCOVERY.md-defined field. x402scan ignores unknown keys.
+ * - The value comes from the service-level config (not per-route) since this is a single-product
+ *   service; surfacing it lets x402scan and integrators see the markup without probing a live 402.
  */
 function buildPaymentInfo(
   pricing: RoutePricing,
   cfg: GatewayConfig,
 ): Record<string, unknown> {
   return {
-    protocols: "x402",
-    mode: "swap",
-    currency: pricing.currency,
-    min: pricing.min,
-    max: pricing.max,
+    protocols: ["x402"],
+    price: {
+      mode: "dynamic",
+      currency: pricing.currency,
+      min: pricing.min,
+      max: pricing.max,
+    },
     operatorMarginBps: cfg.operatorMarginBps,
   };
 }

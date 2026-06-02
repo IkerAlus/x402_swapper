@@ -250,6 +250,18 @@ describe("E2E: Full x402 protocol compliance", () => {
       expect(reqs.extra.name).toBe("USD Coin");
       expect(reqs.extra.version).toBe("2");
       expect(reqs.extra.assetTransferMethod).toBe("eip3009");
+
+      // x402scan invocability — DISCOVERY.md § C requires
+      // `extensions.bazaar.info` carrying the schema-derived input. Routes
+      // without it are classified `skipped` ("strict non-invocable").
+      const extensions = (pr as { extensions?: Record<string, unknown> }).extensions;
+      expect(extensions).toBeDefined();
+      const bazaarInfo = (extensions?.bazaar as { info?: Record<string, unknown> })?.info;
+      expect(bazaarInfo).toBeDefined();
+      const inputSchema = bazaarInfo!.inputSchema as { required?: string[] };
+      expect(inputSchema.required).toEqual(
+        expect.arrayContaining(["destinationAsset", "destinationAddress", "amountIn"]),
+      );
     });
   });
 

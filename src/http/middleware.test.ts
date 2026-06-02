@@ -141,6 +141,32 @@ describe("x402 Middleware", () => {
       expect(paymentRequired.resource.url).toMatch(/^\/api\/swap\?/);
       expect(paymentRequired.resource.description).toBe("Premium API access");
     });
+
+    // x402scan DISCOVERY.md § C — for payable indexing, the 402 challenge
+    // must include "Bazaar-style input schema (`extensions.bazaar.info` +
+    // schema-derived input)". Without this, x402scan marks the route as
+    // "strict non-invocable" and skips it from the marketplace.
+    it("carries extensions.bazaar.info with the route's input and output schemas", async () => {
+      const res = await getSwap(app);
+      const paymentRequired = decodePaymentRequiredHeader(
+        res.headers["payment-required"],
+      );
+      const extensions = (paymentRequired as { extensions?: Record<string, unknown> }).extensions;
+      expect(extensions).toBeDefined();
+      const bazaar = extensions?.bazaar as { info?: { inputSchema?: unknown; outputSchema?: unknown } };
+      expect(bazaar?.info).toBeDefined();
+
+      // The input schema must list the buyer-facing fields as required.
+      const inputSchema = bazaar!.info!.inputSchema as { required?: string[]; type?: string };
+      expect(inputSchema.type).toBe("object");
+      expect(inputSchema.required).toEqual(
+        expect.arrayContaining(["destinationAsset", "destinationAddress", "amountIn"]),
+      );
+
+      // The output schema must be present (even though the body is `{}` by D14).
+      const outputSchema = bazaar!.info!.outputSchema as { type?: string };
+      expect(outputSchema.type).toBe("object");
+    });
   });
 
   // ── Invalid payment header ─────────────────────────────────────────

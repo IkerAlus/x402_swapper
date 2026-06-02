@@ -154,7 +154,7 @@ describe("Discovery endpoints", () => {
     const res = await request(app).get("/openapi.json");
     const op = res.body.paths["/api/swap"].get;
     expect(op.security).toEqual([{ x402: [] }]);
-    expect(op["x-payment-info"].protocols).toBe("x402");
+    expect(op["x-payment-info"].protocols).toEqual(["x402"]); // DISCOVERY.md § A — array form
     expect(op.responses["402"]).toBeDefined();
     expect(res.body.components.securitySchemes.x402).toMatchObject({
       type: "http",

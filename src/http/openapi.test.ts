@@ -166,28 +166,49 @@ describe("buildOpenApiDocument — operations + security", () => {
 // x-payment-info — swap-mode pricing
 // ═══════════════════════════════════════════════════════════════════════
 
-describe("buildOpenApiDocument — x-payment-info", () => {
-  it("emits swap-mode pricing with min/max from the route and operatorMarginBps from cfg", () => {
+describe("buildOpenApiDocument — x-payment-info (DISCOVERY.md § A conformance)", () => {
+  it("emits the x402scan-blessed shape: protocols array, price{} sub-object, mode=dynamic", () => {
     const doc = buildOpenApiDocument(
       info(),
       mockGatewayConfig({ operatorMarginBps: 30 }),
       [route({ pricing: { currency: "USD", min: "0.01", max: "100000" } })],
     );
     const op = (doc.paths as Record<string, Record<string, Record<string, unknown>>>)["/api/swap"]!.get!;
+    // Per DISCOVERY.md § A — protocols MUST be an array (every adjacent
+    // example uses array form); price MUST be a nested object with
+    // mode = "fixed" | "dynamic". Our swap-quote pricing is dynamic.
     expect(op["x-payment-info"]).toEqual({
-      protocols: "x402",
-      mode: "swap",
-      currency: "USD",
-      min: "0.01",
-      max: "100000",
+      protocols: ["x402"],
+      price: {
+        mode: "dynamic",
+        currency: "USD",
+        min: "0.01",
+        max: "100000",
+      },
+      // Gateway-specific extension at the same level as `price` — clearly
+      // not a spec field; x402scan ignores unknown keys.
       operatorMarginBps: 30,
     });
   });
 
-  it("allows operatorMarginBps=0 (free deployment)", () => {
+  it("allows operatorMarginBps=0 (free deployment) without dropping the field", () => {
     const doc = buildOpenApiDocument(info(), mockGatewayConfig({ operatorMarginBps: 0 }), [route()]);
     const op = (doc.paths as Record<string, Record<string, Record<string, unknown>>>)["/api/swap"]!.get!;
     expect((op["x-payment-info"] as { operatorMarginBps: number }).operatorMarginBps).toBe(0);
+  });
+
+  it("never emits the deprecated flat shape (`mode: 'swap'`, scalar `protocols`)", () => {
+    // Regression: an earlier shape was `{ protocols: "x402", mode: "swap",
+    // currency, min, max, operatorMarginBps }`. The new shape nests pricing
+    // inside `price` and uses the array form of `protocols`. This test pins
+    // the change so a refactor can't silently regress the wire contract.
+    const doc = buildOpenApiDocument(info(), mockGatewayConfig(), [route()]);
+    const op = (doc.paths as Record<string, Record<string, Record<string, unknown>>>)["/api/swap"]!.get!;
+    const info_ = op["x-payment-info"] as Record<string, unknown>;
+    expect(info_.mode).toBeUndefined();           // mode lives inside price now
+    expect(info_.currency).toBeUndefined();       // currency lives inside price now
+    expect(typeof info_.protocols).toBe("object"); // array, not string
+    expect(Array.isArray(info_.protocols)).toBe(true);
   });
 });
 

@@ -391,6 +391,19 @@ async function returnPaymentRequired(
       description: deps.resourceDescription,
     },
     accepts: [toPaymentRequirements(requirements)],
+    // x402scan classifies routes as "invocable" only when the 402 envelope
+    // carries an input schema under `extensions.bazaar.info` (per
+    // DISCOVERY.md § C and "Common Failure Reasons" → "Missing input schema
+    // → strict non-invocable, marked `skipped`"). Reuse the schemas the
+    // route already publishes for OpenAPI — single source of truth.
+    extensions: {
+      bazaar: {
+        info: {
+          inputSchema: deps.route.inputSchema,
+          outputSchema: deps.route.outputSchema,
+        },
+      },
+    },
   };
 
   res.status(402);
