@@ -25,7 +25,7 @@ import { mockGatewayConfig } from "../mocks/mock-config.js";
 
 function info(overrides: Partial<OpenApiInfo> = {}): OpenApiInfo {
   return {
-    title: "x402-1cs-gateway",
+    title: "x402-swapper",
     version: "0.1.0",
     description: "test description",
     ...overrides,

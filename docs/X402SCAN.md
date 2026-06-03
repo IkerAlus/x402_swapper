@@ -139,7 +139,7 @@ Expected (OpenAPI, abbreviated):
 ```json
 {
   "openapi": "3.1.0",
-  "info": { "title": "x402-1cs-gateway", "version": "0.1.0" },
+  "info": { "title": "x402-swapper", "version": "0.1.0" },
   "x-discovery": { "ownershipProofs": ["0x4aada6...0b1c"] },
   "paths": ["/api/swap"]
 }

@@ -31,6 +31,9 @@ import { buildProtectedRoutes } from "./http/protected-routes.js";
 import { buildWellKnownDocument } from "./http/discovery.js";
 import { buildOpenApiDocument } from "./http/openapi.js";
 import { createRequire } from "node:module";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 
 async function main(): Promise<void> {
   // ── 0. Global error handlers ───────────────────────────────────────
@@ -211,9 +214,30 @@ async function main(): Promise<void> {
   app.get("/openapi.json", (_req, res) => {
     res.type("application/json").json(openApiDoc);
   });
+
+  // ── /favicon.ico (and /favicon.png) ───────────────────────────────
+  //
+  // Browsers auto-fetch /favicon.ico on page load, and discovery validators
+  // (e.g. `@agentcash/discovery`) warn `FAVICON_MISSING` when it's absent.
+  // The asset itself is the NEAR ecosystem icon shipped at the repo root.
+  // Read once at startup → serve from memory, with a long Cache-Control so
+  // browsers don't keep re-fetching. Mounted ABOVE the protected-routes
+  // loop so it's unauthenticated, same as the discovery surfaces.
+  //
+  // Resolved relative to this file's location so it works under both
+  // `tsx src/server.ts` (dev) and any future compiled-to-dist build.
+  const faviconPath = join(dirname(fileURLToPath(import.meta.url)), "../near_icon.png");
+  const faviconBytes = readFileSync(faviconPath);
+  app.get(["/favicon.ico", "/favicon.png"], (_req, res) => {
+    res.type("image/png");
+    res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+    res.send(faviconBytes);
+  });
+
   console.log(
     `[x402-1CS] Discovery — /.well-known/x402 (${wellKnownDoc.resources.length} resource(s), ` +
-      `${wellKnownDoc.ownershipProofs.length} proof(s)), /openapi.json (OpenAPI 3.1)`,
+      `${wellKnownDoc.ownershipProofs.length} proof(s)), /openapi.json (OpenAPI 3.1), ` +
+      `/favicon.ico (${faviconBytes.length} bytes)`,
   );
 
   // Health check (no payment required)

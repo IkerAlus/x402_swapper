@@ -12,12 +12,22 @@ import express from "express";
 import helmet from "helmet";
 import cors from "cors";
 import request from "supertest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import { buildCorsOptions } from "./http/cors-options.js";
 import type { GatewayConfig } from "./infra/config.js";
 import { buildWellKnownDocument } from "./http/discovery.js";
 import { buildOpenApiDocument } from "./http/openapi.js";
 import { buildProtectedRoutes } from "./http/protected-routes.js";
 import { mockGatewayConfig } from "./mocks/mock-config.js";
+
+// Load the favicon bytes once for the whole test file — mirrors the
+// "read once at startup" pattern in `server.ts`. Resolved relative to
+// this file so tests run from any CWD.
+const FAVICON_BYTES = readFileSync(
+  join(dirname(fileURLToPath(import.meta.url)), "../near_icon.png"),
+);
 
 /** Minimal app mirroring `server.ts` middleware chain. */
 function buildApp(cfg: Pick<GatewayConfig, "allowedOrigins">): express.Express {
@@ -96,7 +106,7 @@ describe("Discovery endpoints", () => {
     const routes = buildProtectedRoutes(cfg);
     const wellKnown = buildWellKnownDocument(cfg, routes);
     const openApi = buildOpenApiDocument(
-      { title: "x402-1cs-gateway", version: "0.1.0", description: "test build" },
+      { title: "x402-swapper", version: "0.1.0", description: "test build" },
       cfg,
       routes,
     );
@@ -110,6 +120,11 @@ describe("Discovery endpoints", () => {
     });
     app.get("/openapi.json", (_req, res) => {
       res.type("application/json").json(openApi);
+    });
+    app.get(["/favicon.ico", "/favicon.png"], (_req, res) => {
+      res.type("image/png");
+      res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+      res.send(FAVICON_BYTES);
     });
     return { app, cfg };
   }
@@ -173,6 +188,31 @@ describe("Discovery endpoints", () => {
 
     const r2 = await request(app).get("/openapi.json");
     expect(r2.status).not.toBe(402);
+  });
+
+  // /favicon.ico — browsers auto-fetch this on page load, and discovery
+  // validators (@agentcash/discovery → FAVICON_MISSING) flag its absence.
+  // Both .ico and .png paths serve the same PNG bytes; the .ico path is
+  // the browser default; .png covers explicit `<link rel="icon">` references.
+  it.each(["/favicon.ico", "/favicon.png"])(
+    "serves %s as image/png with long-cache headers",
+    async (path) => {
+      const { app } = buildDiscoveryApp();
+      const res = await request(app).get(path);
+      expect(res.status).toBe(200);
+      expect(res.headers["content-type"]).toMatch(/^image\/png/);
+      expect(res.headers["cache-control"]).toMatch(/max-age=\d{7,}/); // ≥ 10⁷s (≈ 4 mo)
+      // PNG magic bytes: 89 50 4E 47 0D 0A 1A 0A
+      expect(res.body.length).toBeGreaterThan(0);
+      expect(res.body[0]).toBe(0x89);
+      expect(res.body.slice(1, 4).toString("utf8")).toBe("PNG");
+    },
+  );
+
+  it("favicon endpoints skip the x402 middleware (never 402)", async () => {
+    const { app } = buildDiscoveryApp();
+    const r = await request(app).get("/favicon.ico");
+    expect(r.status).not.toBe(402);
   });
 
   it("both endpoints succeed even when publicBaseUrl is unset (local dev)", async () => {

@@ -486,6 +486,13 @@ export function jsonSchemaToQueryParameters(
     if (typeof fieldSchema.description === "string") {
       param.description = fieldSchema.description;
     }
+    // OpenAPI 3.1: lift `example` from the schema to the parameter level.
+    // Some discovery tools (e.g. x402scan) read examples at the parameter
+    // level to auto-construct probe URLs for paid routes whose required
+    // params would otherwise return 400 before reaching the 402 paywall.
+    if (fieldSchema.example !== undefined) {
+      param.example = fieldSchema.example;
+    }
     return param;
   });
 }

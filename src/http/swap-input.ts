@@ -63,21 +63,30 @@ export const SwapRequestInputJsonSchema: Record<string, unknown> = {
       type: "string",
       pattern: "^[a-z0-9][a-z0-9_]*:.+$",
       description: "1CS asset ID the buyer wants to receive. Production formats: 'nep141:...' (NEP-141), 'nep245:...' (NEP-245 multi-token), and '1cs_v1:<chain>:<token-standard>:<address>' (e.g. '1cs_v1:sol:spl:A7bdi...'). The destination chain is derived from the asset's prefix; unknown prefixes pass through to 1CS for validation.",
+      // Example values let x402scan (and any other OpenAPI tool) construct
+      // a valid probe URL without guessing — required for "Add Server" to
+      // auto-probe a paid route whose params are required. See the spec's
+      // error hint: "mark the required parameters in your OpenAPI spec so
+      // we can probe automatically".
+      example: "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
     },
     destinationAddress: {
       type: "string",
       description: "Buyer's recipient on the destination chain. Format depends on chain.",
+      example: "test.near",
     },
     amountIn: {
       type: "string",
       pattern: "^[1-9]\\d*$",
       description: "Origin amount the buyer is paying, in the smallest unit (digit-only string).",
+      example: "1000000",
     },
     refundAddress: {
       type: "string",
       pattern: "^0x[a-fA-F0-9]{40}$",
       description:
         "Optional EVM refund address. When omitted, refunds fall back to the gateway's wallet and the operator forwards manually.",
+      example: "0x0000000000000000000000000000000000000000",
     },
   },
 };

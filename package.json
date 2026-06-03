@@ -1,7 +1,7 @@
 {
-  "name": "x402-1cs-gateway",
+  "name": "x402-swapper",
   "version": "0.1.0",
-  "description": "x402-compliant payment gateway for NEAR Intents 1Click Swap API",
+  "description": "x402-gated cross-chain swap service. Pay USDC on Base via x402, receive any 1CS-supported asset on 32+ chains at a buyer-supplied address. One signed EIP-3009 authorization per swap.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
