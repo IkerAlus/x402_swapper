@@ -16,6 +16,7 @@ import { loadConfigFromEnv } from "./infra/config.js";
 import { buildCorsOptions } from "./http/cors-options.js";
 import { createStateStore } from "./storage/store.js";
 import { ProviderPool } from "./infra/provider-pool.js";
+import { inspectJwtExpiry, formatJwtInspection } from "./infra/jwt-check.js";
 import { createChainReader } from "./payment/verifier.js";
 import {
   createBroadcastFn,
@@ -55,6 +56,24 @@ async function main(): Promise<void> {
     `[x402-1CS] Config OK — network=${cfg.originNetwork}, ` +
       `originAsset=${cfg.originAssetIn}, operatorMarginBps=${cfg.operatorMarginBps}`,
   );
+
+  // ── 1a. 1CS JWT expiry check (TODO #6) ─────────────────────────────
+  //
+  // Refuse boot on an expired JWT — otherwise every quote returns 401
+  // (surfaced as 503 to buyers) and operators have no warning. Also
+  // warn at startup if expiry is within 7 days so renewal is scheduled.
+  // Malformed JWTs are logged but not fatal — the live request path
+  // would surface a real 401 instantly and that's the authoritative
+  // answer; we don't want a parse heuristic to ground the gateway.
+  const jwtInspection = inspectJwtExpiry(cfg.oneClickJwt);
+  const jwtLine = formatJwtInspection(jwtInspection);
+  if (jwtLine) {
+    if (jwtInspection.kind === "checked" && jwtInspection.expired) {
+      console.error(jwtLine);
+      process.exit(1);
+    }
+    console.warn(jwtLine);
+  }
 
   // ── 2. Initialize state store ──────────────────────────────────────
   //
