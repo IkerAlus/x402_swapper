@@ -84,6 +84,39 @@ async function main(): Promise<void> {
     `[x402-1CS] Provider pool ready — ${providerPool.size} RPC endpoint(s)`,
   );
 
+  // ── 3a. RPC reachability check (TODO #5) ───────────────────────────
+  //
+  // Probe every RPC with `eth_blockNumber`. Refuse boot if ALL fail —
+  // otherwise the gateway happily accepts requests and only crashes at
+  // first settlement broadcast (by which time the buyer has signed).
+  // Partial failure (some healthy, some down) is OK — the pool's
+  // round-robin + health logic skips the failed ones.
+  const reachability = await providerPool.checkReachability();
+  if (reachability.healthy.length === 0) {
+    console.error(
+      `[x402-1CS] ❌ Boot refused: none of the ${providerPool.size} configured RPC endpoint(s) responded to eth_blockNumber:`,
+    );
+    for (const { url, reason } of reachability.failed) {
+      console.error(`           ${url} — ${reason}`);
+    }
+    console.error(
+      "[x402-1CS] Check ORIGIN_RPC_URLS in your .env. Each URL must serve eth_blockNumber over HTTPS.",
+    );
+    process.exit(1);
+  }
+  if (reachability.failed.length > 0) {
+    console.warn(
+      `[x402-1CS] ⚠️  ${reachability.failed.length}/${providerPool.size} RPC endpoint(s) unreachable at startup — pool is degraded:`,
+    );
+    for (const { url, reason } of reachability.failed) {
+      console.warn(`           ${url} — ${reason}`);
+    }
+  } else {
+    console.log(
+      `[x402-1CS] RPC reachability: ${reachability.healthy.length}/${providerPool.size} healthy`,
+    );
+  }
+
   // ── 4. Create the facilitator wallet ───────────────────────────────
   const wallet = providerPool.getWallet(cfg.facilitatorPrivateKey);
   console.log(`[x402-1CS] Facilitator wallet: ${wallet.address}`);

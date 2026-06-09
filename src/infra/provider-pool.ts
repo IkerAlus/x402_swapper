@@ -187,6 +187,50 @@ export class ProviderPool {
   }
 
   /**
+   * Check reachability of ALL providers in parallel by calling
+   * `eth_blockNumber` on each. Used at startup (TODO #5) to fail fast
+   * when no RPCs are reachable, instead of discovering the problem at
+   * the first settlement broadcast.
+   *
+   * Side effect: updates each entry's `healthy` flag based on the result,
+   * so subsequent `getProvider()` calls reflect the latest state.
+   *
+   * Behaviour intentionally tolerates partial-pool failure — only `failed`
+   * counts as a degraded state; the caller (server.ts) decides whether
+   * to refuse boot based on whether `healthy` is empty.
+   */
+  async checkReachability(): Promise<{
+    healthy: string[];
+    failed: Array<{ url: string; reason: string }>;
+  }> {
+    const results = await Promise.all(
+      this.entries.map(async (entry) => {
+        try {
+          await entry.provider.getBlockNumber();
+          entry.healthy = true;
+          return { url: entry.url, ok: true as const };
+        } catch (err) {
+          entry.healthy = false;
+          entry.lastFailedAt = Date.now();
+          const reason = err instanceof Error ? err.message : String(err);
+          return { url: entry.url, ok: false as const, reason };
+        }
+      }),
+    );
+
+    const healthy: string[] = [];
+    const failed: Array<{ url: string; reason: string }> = [];
+    for (const r of results) {
+      if (r.ok) {
+        healthy.push(r.url);
+      } else {
+        failed.push({ url: r.url, reason: r.reason });
+      }
+    }
+    return { healthy, failed };
+  }
+
+  /**
    * Get the number of currently healthy providers.
    */
   get healthyCount(): number {
