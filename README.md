@@ -22,8 +22,6 @@ GET /api/swap?destinationAsset=...&destinationAddress=alice.near&amountIn=100000
 
 This project is in alpha. See [docs/TODO.md](docs/TODO.md) for what's still missing for a live deployment — most importantly TLS, file-based persistence, graceful shutdown, and a regulatory review (this kind of service is, in many jurisdictions, a regulated money-transmission activity — see [docs/OPERATOR_GUIDE.md](docs/OPERATOR_GUIDE.md)).
 
-This codebase pivoted from a single-merchant payment gateway to a swap-as-resource service on 2026-05-07. See [implementation_plan.md](implementation_plan.md) for the execution log and [SWAP_AS_RESOURCE.md](SWAP_AS_RESOURCE.md) for the original product brief.
-
 ---
 
 ## Project structure
