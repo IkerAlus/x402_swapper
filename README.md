@@ -131,6 +131,8 @@ There are **no merchant-side fields** — buyers supply destination per-request 
 | `STORE_FILE_PATH` | unset (in-memory) | Path to the SQLite file backing the swap-state store. Leave unset for development; set for any real deployment to survive crashes/deploys. D12 stale-DB fail-fast applies — see [docs/OPERATOR_GUIDE.md](docs/OPERATOR_GUIDE.md) § "First boot". |
 | `STORE_SAVE_INTERVAL_MS` | `30000` (30 s) | How often the SQLite snapshot is flushed to disk. Only used when `STORE_FILE_PATH` is set. Also flushes on graceful shutdown. |
 | `SHUTDOWN_GRACE_MS` | `30000` (30 s) | On SIGTERM/SIGINT, max wait for in-flight settlements to drain before forcing exit. Align with your k8s `terminationGracePeriodSeconds` / systemd `TimeoutStopSec`. |
+| `MAX_AMOUNT_IN` | unset (no cap) | Optional digit-string cap on the buyer's `amountIn` (origin asset's smallest unit). When set, requests above the cap are rejected `400 INVALID_INPUT` before contacting 1CS. Bounds per-request economic exposure and preserves JWT quota. |
+| `SLIPPAGE_TOLERANCE_BPS` | `50` (0.5%) | Slippage tolerance forwarded to 1CS on every quote. Range `0`–`1000` (10%). Tighten for stablecoin-only pairs, widen for volatile destinations. Surfaced on 402s as `extra.crossChain.slippageToleranceBps`. |
 | `ALLOWED_ORIGINS` | unset (reflect any) | CORS allowlist for browser clients |
 | `PUBLIC_BASE_URL` | unset | Required before registering on x402scan |
 | `OWNERSHIP_PROOFS` | empty | Comma-separated EIP-191 proofs (use `npx tsx scripts/generate-ownership-proof.ts`) |

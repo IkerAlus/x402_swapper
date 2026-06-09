@@ -1,7 +1,7 @@
 # x402-1CS Swap Service — Production Readiness TODO
 
-**Last touched:** 2026-05-13 (TODO #2 + #3 landed)
-**Test suite status:** 434 passing | 13 skipped (live-only, JWT-gated) — typecheck clean
+**Last touched:** 2026-06-09 (TODO #5, #6, #8, #9 landed — PR A operability quick wins)
+**Test suite status:** 485 passing | 13 skipped (live-only, JWT-gated) — typecheck clean
 **Target:** prototype deployment for a small set of users / agents
 
 ---
@@ -19,6 +19,10 @@
 | Receipt-as-header (D14 — `PAYMENT-RESPONSE.extensions.crossChain`) | Working |
 | Rate limiting (per-IP + settlement cap + GC) | Working |
 | RPC provider pool with failover | Working |
+| RPC reachability check at startup (TODO #5) | Working — refuses boot when 0/N reachable |
+| 1CS JWT expiry check at startup (TODO #6) | Working — refuses boot when expired, warns when <7d |
+| `MAX_AMOUNT_IN` cap (TODO #8) | Optional, opt-in via env-var |
+| Configurable slippage tolerance (TODO #9) | Working — defaults to 50 bps, env-tunable |
 | Stale-DB fail-fast at SqliteStateStore.init() (D12) | Working |
 | In-flight settlement recovery on restart | Working |
 | Error response sanitization (no internals leaked; structured 400 INVALID_INPUT) | Working |
@@ -30,6 +34,15 @@
 ---
 
 ## Recently Completed
+
+### 2026-06-09 — Operability quick wins (TODO #5, #6, #8, #9)
+
+PR A from the production-readiness roadmap. Four small, independent additions, all behind defaults that preserve existing behaviour. Test suite: 434 → 485 passing (+51).
+
+- **TODO #5 — RPC reachability check at startup**. `ProviderPool.checkReachability()` probes every URL with `eth_blockNumber` in parallel; `server.ts` refuses boot when 0/N are reachable and warns when partial. Previously a bad RPC URL only surfaced at first broadcast — by which point the buyer had signed.
+- **TODO #6 — 1CS JWT expiry check at startup**. New `src/infra/jwt-check.ts` base64url-decodes the `exp` claim (no signature verification, no JWT library); `server.ts` refuses boot on expired tokens and warns when `< 7 days` to expiry. Silent for healthy tokens.
+- **TODO #8 — `MAX_AMOUNT_IN` cap**. Optional env-var bounding the buyer-supplied `amountIn`; enforced BigInt-wise *before* contacting 1CS. Rejects with `400 INVALID_INPUT` carrying a `buyer-format` detail. Preserves JWT quota, prevents inattentive-buyer 10× sign-ups. Defaults unset for dev-friendliness.
+- **TODO #9 — `SLIPPAGE_TOLERANCE_BPS` env var**. Replaces the hardcoded 50-bps slippage tolerance; range 0–1000 bps (safety cap below 1CS's own 10000-bps API limit). Surfaced on every 402 as `extra.crossChain.slippageToleranceBps` so buyers see the worst case they're accepting.
 
 ### 2026-05-13 — Persistence + graceful shutdown (TODO #2, #3)
 
@@ -60,7 +73,9 @@ The codebase pivoted from a single-merchant payment gateway to a swap-as-resourc
 
 ## BLOCKERS — Must fix before any real user touches it
 
-> **Note on numbering**: IDs (#1, #4, ..., #19) are stable for cross-reference from code comments and `OPERATOR_GUIDE.md`. Gaps indicate items moved to "Recently Completed" — items #2 (file persistence) and #3 (graceful shutdown) closed 2026-05-13.
+> **Note on numbering**: IDs (#1, #4, #7, #10, …) are stable for cross-reference from code comments and `OPERATOR_GUIDE.md`. Gaps indicate items moved to "Recently Completed":
+> - #2 (file persistence) + #3 (graceful shutdown) closed 2026-05-13
+> - #5 (RPC reachability) + #6 (JWT expiry) + #8 (MAX_AMOUNT_IN) + #9 (slippage) closed 2026-06-09
 
 ### 1. Add HTTPS / TLS termination
 
@@ -86,26 +101,6 @@ This is **not a code item** — it's an operator concern. See [docs/OPERATOR_GUI
 
 ## STRONGLY RECOMMENDED — Important for a stable prototype
 
-### 5. Validate RPC reachability at startup
-
-**Current:** If all RPC URLs are unreachable, the server starts fine but every settlement fails at broadcast time. There's a facilitator balance check at startup, but it's non-blocking.
-
-**Fix:** On startup, call `eth_blockNumber` on the primary RPC. If all configured RPCs fail, refuse to start.
-
-**File:** [src/server.ts](../src/server.ts).
-
----
-
-### 6. Check 1CS JWT expiry at startup
-
-**Current:** If the JWT expires, every quote request fails with 401 (which surfaces as 503 `AUTHENTICATION_ERROR` to the buyer) and there's no warning.
-
-**Fix:** Decode the JWT payload, log expiry at startup, warn if < 7 days remaining, fail fast if already expired.
-
-**File:** [src/server.ts](../src/server.ts).
-
----
-
 ### 7. Add structured logging
 
 **Current:** Bare `console.log`/`console.warn` — no timestamps on the happy-path lines, no correlation IDs on success logs (errors do carry them). The `no-console` ESLint warnings flag the intentional uses.
@@ -113,26 +108,6 @@ This is **not a code item** — it's an operator concern. See [docs/OPERATOR_GUI
 **Fix:** Adopt `pino` for JSON output with per-request correlation IDs. The error path already generates correlation IDs ([src/http/middleware.ts](../src/http/middleware.ts) `generateCorrelationId`); thread them through the success path too.
 
 **Files:** [src/payment/settler.ts](../src/payment/settler.ts), [src/http/middleware.ts](../src/http/middleware.ts), [src/payment/quote-engine.ts](../src/payment/quote-engine.ts), [src/server.ts](../src/server.ts).
-
----
-
-### 8. Buyer abuse mitigation — `MAX_AMOUNT_IN` cap
-
-**Risk:** A public GET endpoint that quotes 1CS for any destination/asset/amount is a quote-DoS surface. Mitigations in place: per-IP `quoteLimiter` (rate-limits 402 generation), `settlementLimiter` (caps concurrent settlements). What's missing: an upper bound on per-request amount.
-
-**Fix:** Add `MAX_AMOUNT_IN` env var; reject `amountIn` above the cap with 400 `INVALID_INPUT` before contacting 1CS. Bound the operator's quote-economics exposure per request.
-
-**Files:** [src/infra/config.ts](../src/infra/config.ts), [src/http/swap-input.ts](../src/http/swap-input.ts) (cross-field check after Zod parse).
-
----
-
-### 9. Make slippage tolerance configurable
-
-**Current:** `slippageTolerance: 50` (0.5%) is hardcoded in [src/payment/quote-engine.ts](../src/payment/quote-engine.ts) `buildSwapQuoteRequest`. For swap-as-resource, the buyer is more sensitive to slippage than a merchant; some operators may want tighter (10 bps) or looser (200 bps) defaults.
-
-**Fix:** Add `SLIPPAGE_TOLERANCE_BPS` env var with a sensible default (50). Surface the active value in `extra.crossChain` so the buyer can see it.
-
-**Files:** [src/infra/config.ts](../src/infra/config.ts), [src/payment/quote-engine.ts](../src/payment/quote-engine.ts).
 
 ---
 
@@ -218,12 +193,12 @@ Phase 1 — Go-live minimum
   └── #4  Regulatory / KYC posture      (legal review, days–weeks) [OPEN]
 
 Phase 2 — Stable prototype (items 5-10)
-  ├── #5  RPC startup validation        (~20 min)
-  ├── #6  JWT expiry check              (~20 min)
-  ├── #8  MAX_AMOUNT_IN cap             (~30 min)
-  ├── #9  Configurable slippage         (~30 min)
-  ├── #10 Gateway authentication        (~1 hr)
-  └── #7  Structured logging            (~2 hrs)
+  ├── #5  RPC startup validation        (~20 min)                [DONE 2026-06-09]
+  ├── #6  JWT expiry check              (~20 min)                [DONE 2026-06-09]
+  ├── #8  MAX_AMOUNT_IN cap             (~30 min)                [DONE 2026-06-09]
+  ├── #9  Configurable slippage         (~30 min)                [DONE 2026-06-09]
+  ├── #10 Gateway authentication        (~1 hr)                  [OPEN — PR B]
+  └── #7  Structured logging            (~2 hrs)                 [OPEN — PR C]
 
 Phase 3 — Production hardening (items 11-19)
   └── As needed based on scale, jurisdiction, and operational experience

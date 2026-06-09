@@ -72,10 +72,10 @@ Note that buyers can sidestep IP-based geofencing with a VPN. For high-stakes us
 
 ### 4. Per-buyer / per-route limits
 
-**Default**: per-IP rate limits (`RATE_LIMIT_QUOTES_PER_WINDOW`, default 20/min) and a global concurrent settlement cap (`MAX_CONCURRENT_SETTLEMENTS`, default 10). No per-amount cap.
+**Default**: per-IP rate limits (`RATE_LIMIT_QUOTES_PER_WINDOW`, default 20/min) and a global concurrent settlement cap (`MAX_CONCURRENT_SETTLEMENTS`, default 10). No per-amount cap by default.
 
 **Recommendations**:
-- Add `MAX_AMOUNT_IN` env var (item #8 in TODO) to bound the operator's quote-economics exposure per request.
+- Set `MAX_AMOUNT_IN` (TODO #8 — implemented) to bound per-request quote-economics exposure. Unset by default for dev convenience; for any real deployment, configure it to the largest swap you want to underwrite per request.
 - Consider per-buyer (signer-address) daily / monthly volume caps if the regulatory regime requires them.
 
 ### 5. ToS / disclaimers at the 402 challenge
@@ -194,11 +194,13 @@ Before you point real buyers at the gateway:
 
 6. **Funded facilitator** — needs ETH on Base for gas. The startup log shows the balance; warn-level if zero. Plan to top it up.
 
-7. **JWT expiry monitoring** — the 1CS JWT has an expiry claim. The gateway doesn't check it at startup yet ([TODO #6](TODO.md)). Set a calendar reminder.
+7. **JWT expiry monitoring** ✅ implemented (TODO #6). The gateway base64-decodes `ONE_CLICK_JWT`'s `exp` claim at startup: refuses boot when expired, warns when `< 7 days` remaining. Silent on healthy tokens. No JWT library, no signature verification — only the timestamp is inspected. Renewal is still operator-manual; set a calendar reminder from the warn-line's expiry timestamp.
 
-8. **MAX_AMOUNT_IN cap** — bound your quote-economics exposure. Without this, a single buyer can request a quote for an arbitrarily large swap; you don't pay anything until they sign, but the 1CS quote itself counts against your JWT rate limit. [TODO #8](TODO.md).
+8. **`MAX_AMOUNT_IN` cap** ✅ implemented (TODO #8). Optional env-var (digit-string in the origin asset's smallest unit). When set, the gateway rejects `400 INVALID_INPUT` (with a `buyer-format` detail naming `amountIn`) before contacting 1CS — preserves JWT quota and bounds the per-request exposure window. Unset = no cap (dev-friendly). For production, set this to the largest swap you want to underwrite per request (e.g. `MAX_AMOUNT_IN=500000000` for 500 USDC at 6 decimals).
 
-9. **Slippage tolerance** — currently hardcoded at 50 bps. If you want tighter (10) or looser (200), it's a one-line change pending the env-var lift in [TODO #9](TODO.md).
+9. **Slippage tolerance** ✅ implemented (TODO #9). New `SLIPPAGE_TOLERANCE_BPS` env-var (range 0–1000 bps; default 50 = 0.5%). Tighten for stablecoin-only pairs (e.g. `10`), widen for volatile / illiquid destinations (e.g. `200`). The active value is surfaced on every 402 envelope at `extra.crossChain.slippageToleranceBps` so buyers see what they're implicitly accepting.
+
+  Bonus — **RPC reachability check** ✅ implemented (TODO #5). At boot the gateway probes every `ORIGIN_RPC_URLS` entry with `eth_blockNumber` in parallel. Refuses boot when 0/N respond; warns when partial. Replaces the pre-existing best-effort balance check; previously a bad RPC URL only surfaced at first settlement broadcast.
 
 10. **Gateway authentication** — anyone with the URL can hit the 402 flow. Consider an `X-API-Key` middleware or IP allowlist. [TODO #10](TODO.md).
 
