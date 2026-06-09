@@ -114,6 +114,21 @@ export const GatewayConfigSchema = z.object({
    */
   shutdownGraceMs: z.number().int().positive().default(30_000),
 
+  // ── Quote tuning ───────────────────────────────────────────────────
+  /**
+   * Slippage tolerance in basis points, forwarded to 1CS on every quote
+   * (TODO #9). Default 50 (0.5%) — reasonable for USDC↔USDC routes.
+   *
+   * For volatile pairs (e.g. USDC → ETH on a thin destination chain) the
+   * operator may want to widen this so 1CS doesn't reject legitimate
+   * quotes; for tightly-priced stablecoin pairs the operator may want
+   * to tighten it. Hard upper bound 1000 (10%) to prevent foot-guns.
+   *
+   * Surfaced on every 402 envelope as `extra.crossChain.slippageTolerance`
+   * so buyers can see the value they're accepting.
+   */
+  slippageToleranceBps: z.number().int().min(0).max(1000).default(50),
+
   // ── Abuse mitigation ───────────────────────────────────────────────
   /**
    * Optional upper bound on the buyer-supplied `amountIn` (TODO #8).
@@ -250,6 +265,9 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv = process.env): Gateway
       : undefined,
     shutdownGraceMs: env.SHUTDOWN_GRACE_MS ? Number(env.SHUTDOWN_GRACE_MS) : undefined,
     maxAmountIn: orUndef(env.MAX_AMOUNT_IN),
+    slippageToleranceBps: env.SLIPPAGE_TOLERANCE_BPS
+      ? Number(env.SLIPPAGE_TOLERANCE_BPS)
+      : undefined,
     maxPollTimeMs: env.MAX_POLL_TIME_MS ? Number(env.MAX_POLL_TIME_MS) : undefined,
     pollIntervalBaseMs: env.POLL_INTERVAL_BASE_MS ? Number(env.POLL_INTERVAL_BASE_MS) : undefined,
     pollIntervalMaxMs: env.POLL_INTERVAL_MAX_MS ? Number(env.POLL_INTERVAL_MAX_MS) : undefined,

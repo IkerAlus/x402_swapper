@@ -107,6 +107,7 @@ function liveConfig(overrides: Partial<GatewayConfig> = {}): GatewayConfig {
     facilitatorPrivateKey: facilitatorWallet.privateKey,
     gatewayRefundAddress: facilitatorWallet.address,
     operatorMarginBps: 30,
+    slippageToleranceBps: 50, // TODO #9 — 1CS requires this field; schema default
     maxPollTimeMs: 300_000,
     pollIntervalBaseMs: 2_000,
     pollIntervalMaxMs: 30_000,

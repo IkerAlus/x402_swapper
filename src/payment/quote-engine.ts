@@ -236,7 +236,9 @@ export function buildSwapQuoteRequest(
   return {
     dry: false,
     swapType: QuoteRequest.swapType.EXACT_INPUT,
-    slippageTolerance: 50, // 0.5% — reasonable default for stablecoins
+    // Per-deploy slippage tolerance (TODO #9). Default 50 bps (0.5%);
+    // operator overrides via SLIPPAGE_TOLERANCE_BPS env-var.
+    slippageTolerance: cfg.slippageToleranceBps,
     originAsset: cfg.originAssetIn,
     depositType: QuoteRequest.depositType.ORIGIN_CHAIN,
     destinationAsset: inputs.destinationAsset,
@@ -656,6 +658,10 @@ function buildCrossChainExtra(
       amount: marginAmount,
       currency: "USDC",
     },
+    // Slippage tolerance the operator asked 1CS to enforce on this swap
+    // (TODO #9). Buyers see the value they're implicitly accepting when
+    // they sign the EIP-3009 authorization.
+    slippageToleranceBps: cfg.slippageToleranceBps,
   };
   if (quote.refundFee !== undefined) out.refundFee = quote.refundFee;
   if (quote.depositMemo !== undefined) out.depositMemo = quote.depositMemo;

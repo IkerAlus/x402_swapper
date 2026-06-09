@@ -463,6 +463,14 @@ export interface CrossChainQuoteExtra {
     /** Currency the margin is denominated in (e.g. `"USDC"`). */
     currency: string;
   };
+  /**
+   * Slippage tolerance (basis points) the operator instructed 1CS to
+   * enforce on this swap (TODO #9). Surfaced so buyers see the value
+   * they're implicitly accepting when they sign the authorization — i.e.
+   * how much worse than the quoted `amountOut` they're willing to receive.
+   * Default 50 (0.5%); operator-configurable via `SLIPPAGE_TOLERANCE_BPS`.
+   */
+  slippageToleranceBps: number;
 }
 
 // ═══════════════════════════════════════════════════════════════════════

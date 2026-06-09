@@ -111,6 +111,7 @@ export function mockGatewayConfig(
     gatewayRefundAddress: FACILITATOR_ADDRESS,
     operatorMarginBps: 30,           // 0.3% — service-default
     operatorFeeRecipient: "operator.near", // Required by D16 when bps > 0
+    slippageToleranceBps: 50,        // 0.5% — schema default (TODO #9)
     // Persistence + shutdown (TODO #2 + #3): in-memory store, defaults for
     // the intervals. Tests that exercise file persistence override storeFilePath.
     storeSaveIntervalMs: 30_000,

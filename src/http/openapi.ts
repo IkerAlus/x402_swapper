@@ -93,6 +93,7 @@ export const CROSS_CHAIN_QUOTE_SCHEMA: Readonly<Record<string, unknown>> =
       "amountInUsd",
       "refundTo",
       "operatorFee",
+      "slippageToleranceBps",
     ],
     properties: {
       protocol: {
@@ -159,6 +160,13 @@ export const CROSS_CHAIN_QUOTE_SCHEMA: Readonly<Record<string, unknown>> =
           },
           currency: { type: "string" },
         },
+      },
+      slippageToleranceBps: {
+        type: "integer",
+        minimum: 0,
+        maximum: 1000,
+        description:
+          "Slippage tolerance (basis points) the operator instructed 1CS to enforce. Buyers see this so they know the worst-case `amountOut` they're implicitly accepting.",
       },
     },
   });

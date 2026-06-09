@@ -187,6 +187,27 @@ describe("buildSwapQuoteRequest", () => {
       buildSwapQuoteRequest(cfg, testInputs(), "2026-01-01T00:00:00Z").refundTo,
     ).toBe(cfg.gatewayRefundAddress);
   });
+
+  // TODO #9 — slippage tolerance is configurable, no longer hardcoded.
+  it("forwards cfg.slippageToleranceBps as the 1CS slippageTolerance field", () => {
+    // Default
+    const defaultCfg = testConfig();
+    expect(
+      buildSwapQuoteRequest(defaultCfg, testInputs(), "2026-01-01T00:00:00Z").slippageTolerance,
+    ).toBe(50);
+
+    // Tightened (10 bps for tight stablecoin pairs)
+    const tight = testConfig({ slippageToleranceBps: 10 });
+    expect(
+      buildSwapQuoteRequest(tight, testInputs(), "2026-01-01T00:00:00Z").slippageTolerance,
+    ).toBe(10);
+
+    // Widened (200 bps for volatile / illiquid destinations)
+    const wide = testConfig({ slippageToleranceBps: 200 });
+    expect(
+      buildSwapQuoteRequest(wide, testInputs(), "2026-01-01T00:00:00Z").slippageTolerance,
+    ).toBe(200);
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════════

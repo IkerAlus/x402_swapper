@@ -177,6 +177,31 @@ describe("GatewayConfigSchema", () => {
     });
   });
 
+  // ── SLIPPAGE_TOLERANCE_BPS (TODO #9) ───────────────────────────────
+  describe("slippageToleranceBps", () => {
+    it("defaults to 50 bps (0.5%)", () => {
+      const cfg = GatewayConfigSchema.parse(validSchemaInput());
+      expect(cfg.slippageToleranceBps).toBe(50);
+    });
+
+    it("accepts the boundary values 0 and 1000", () => {
+      expect(
+        GatewayConfigSchema.parse({ ...validSchemaInput(), slippageToleranceBps: 0 })
+          .slippageToleranceBps,
+      ).toBe(0);
+      expect(
+        GatewayConfigSchema.parse({ ...validSchemaInput(), slippageToleranceBps: 1000 })
+          .slippageToleranceBps,
+      ).toBe(1000);
+    });
+
+    it.each([-1, 1001, 25.5])("rejects out-of-range value %s", (value) => {
+      expect(
+        GatewayConfigSchema.safeParse({ ...validSchemaInput(), slippageToleranceBps: value }).success,
+      ).toBe(false);
+    });
+  });
+
   // ── MAX_AMOUNT_IN cap (TODO #8) ────────────────────────────────────
   describe("maxAmountIn", () => {
     it("defaults to undefined (no cap)", () => {
@@ -259,6 +284,14 @@ describe("loadConfigFromEnv", () => {
       STORE_FILE_PATH: "",
     } as unknown as NodeJS.ProcessEnv);
     expect(cfg.storeFilePath).toBeUndefined();
+  });
+
+  it("maps SLIPPAGE_TOLERANCE_BPS env var (TODO #9)", () => {
+    const cfg = loadConfigFromEnv({
+      ...validEnv(),
+      SLIPPAGE_TOLERANCE_BPS: "200", // 2% — wider than default for volatile pairs
+    } as unknown as NodeJS.ProcessEnv);
+    expect(cfg.slippageToleranceBps).toBe(200);
   });
 
   it("maps MAX_AMOUNT_IN env var (TODO #8)", () => {
