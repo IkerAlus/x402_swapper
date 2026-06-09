@@ -176,6 +176,39 @@ describe("GatewayConfigSchema", () => {
       ).toBe(false);
     });
   });
+
+  // ── MAX_AMOUNT_IN cap (TODO #8) ────────────────────────────────────
+  describe("maxAmountIn", () => {
+    it("defaults to undefined (no cap)", () => {
+      const cfg = GatewayConfigSchema.parse(validSchemaInput());
+      expect(cfg.maxAmountIn).toBeUndefined();
+    });
+
+    it("accepts a positive-integer digit-string", () => {
+      const cfg = GatewayConfigSchema.parse({ ...validSchemaInput(), maxAmountIn: "100000000" });
+      expect(cfg.maxAmountIn).toBe("100000000");
+    });
+
+    it.each([
+      ["empty string", ""],
+      ["leading zero", "01"],
+      ["zero", "0"],
+      ["negative", "-1"],
+      ["non-digit", "1e9"],
+      ["decimal", "100.5"],
+      ["whitespace", " 100 "],
+    ])("rejects %s", (_label, value) => {
+      expect(
+        GatewayConfigSchema.safeParse({ ...validSchemaInput(), maxAmountIn: value }).success,
+      ).toBe(false);
+    });
+
+    it("accepts uint256-class magnitudes (BigInt-safe)", () => {
+      const huge = "1".padEnd(78, "0"); // ~10^77
+      const cfg = GatewayConfigSchema.parse({ ...validSchemaInput(), maxAmountIn: huge });
+      expect(cfg.maxAmountIn).toBe(huge);
+    });
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -226,6 +259,22 @@ describe("loadConfigFromEnv", () => {
       STORE_FILE_PATH: "",
     } as unknown as NodeJS.ProcessEnv);
     expect(cfg.storeFilePath).toBeUndefined();
+  });
+
+  it("maps MAX_AMOUNT_IN env var (TODO #8)", () => {
+    const cfg = loadConfigFromEnv({
+      ...validEnv(),
+      MAX_AMOUNT_IN: "500000000", // 500 USDC at 6 decimals
+    } as unknown as NodeJS.ProcessEnv);
+    expect(cfg.maxAmountIn).toBe("500000000");
+  });
+
+  it("treats empty MAX_AMOUNT_IN as 'unset' (no cap)", () => {
+    const cfg = loadConfigFromEnv({
+      ...validEnv(),
+      MAX_AMOUNT_IN: "",
+    } as unknown as NodeJS.ProcessEnv);
+    expect(cfg.maxAmountIn).toBeUndefined();
   });
 
   it("throws on missing required env vars", () => {

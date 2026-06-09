@@ -6,6 +6,7 @@ import {
   buildQuoteDeadline,
   applyOperatorMargin,
   validateBuyerDestination,
+  enforceAmountInCap,
   mapToPaymentRequirements,
   computeMaxTimeoutSeconds,
   validateDeadline,
@@ -256,6 +257,50 @@ describe("validateBuyerDestination", () => {
         destinationAddress: "alice.near",
       })),
     ).not.toThrow();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// enforceAmountInCap (TODO #8 — pre-quote MAX_AMOUNT_IN gate)
+// ═══════════════════════════════════════════════════════════════════════
+
+describe("enforceAmountInCap", () => {
+  it("is a no-op when maxAmountIn is undefined (cap unset)", () => {
+    expect(() => enforceAmountInCap("999999999999999", undefined)).not.toThrow();
+  });
+
+  it("accepts amountIn === cap (boundary inclusive)", () => {
+    expect(() => enforceAmountInCap("10000000", "10000000")).not.toThrow();
+  });
+
+  it("accepts amountIn < cap", () => {
+    expect(() => enforceAmountInCap("9999999", "10000000")).not.toThrow();
+  });
+
+  it("rejects amountIn > cap with InvalidInputError + buyer-format detail naming amountIn", () => {
+    try {
+      enforceAmountInCap("10000001", "10000000");
+      throw new Error("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(InvalidInputError);
+      const detail = (err as InvalidInputError).context?.reasons as Array<{ source: string; path?: string; message: string }> | undefined;
+      expect(detail).toBeDefined();
+      expect(detail!.length).toBe(1);
+      expect(detail![0]!.source).toBe("buyer-format");
+      expect(detail![0]!.path).toBe("amountIn");
+      expect(detail![0]!.message).toMatch(/exceeds the operator-configured cap/);
+      expect(detail![0]!.message).toContain("10000001");
+      expect(detail![0]!.message).toContain("10000000");
+    }
+  });
+
+  it("uses BigInt — safe at uint256-class magnitudes", () => {
+    // ~10^77 — well past Number.MAX_SAFE_INTEGER (~9.007e15)
+    const huge = "1".padEnd(40, "0"); // 10^39
+    const cap  = "1".padEnd(39, "0"); // 10^38 — 10x smaller
+    expect(() => enforceAmountInCap(huge, cap)).toThrow(InvalidInputError);
+    // and the reverse — cap larger than amount → no throw
+    expect(() => enforceAmountInCap(cap, huge)).not.toThrow();
   });
 });
 

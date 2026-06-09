@@ -114,6 +114,26 @@ export const GatewayConfigSchema = z.object({
    */
   shutdownGraceMs: z.number().int().positive().default(30_000),
 
+  // ── Abuse mitigation ───────────────────────────────────────────────
+  /**
+   * Optional upper bound on the buyer-supplied `amountIn` (TODO #8).
+   *
+   * String of digits in the origin asset's smallest unit (same shape as
+   * the buyer's query field). When set, the gateway rejects requests
+   * with `amountIn > MAX_AMOUNT_IN` as `400 INVALID_INPUT` *before*
+   * contacting 1CS — preserving JWT quota and bounding any single
+   * request's economic exposure (an inattentive buyer can't sign for a
+   * 10× wrong amount).
+   *
+   * Unset = no cap (current behaviour pre-TODO-#8). For production,
+   * recommended to set this to the largest swap the operator wants to
+   * underwrite per request.
+   */
+  maxAmountIn: z
+    .string()
+    .regex(/^[1-9]\d*$/, "MAX_AMOUNT_IN must be a positive integer in the origin asset's smallest unit")
+    .optional(),
+
   // ── Tuning ─────────────────────────────────────────────────────────
   /** Maximum wall-clock time (ms) spent polling 1CS for a terminal status. */
   maxPollTimeMs: z.number().int().positive().default(300_000),
@@ -229,6 +249,7 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv = process.env): Gateway
       ? Number(env.STORE_SAVE_INTERVAL_MS)
       : undefined,
     shutdownGraceMs: env.SHUTDOWN_GRACE_MS ? Number(env.SHUTDOWN_GRACE_MS) : undefined,
+    maxAmountIn: orUndef(env.MAX_AMOUNT_IN),
     maxPollTimeMs: env.MAX_POLL_TIME_MS ? Number(env.MAX_POLL_TIME_MS) : undefined,
     pollIntervalBaseMs: env.POLL_INTERVAL_BASE_MS ? Number(env.POLL_INTERVAL_BASE_MS) : undefined,
     pollIntervalMaxMs: env.POLL_INTERVAL_MAX_MS ? Number(env.POLL_INTERVAL_MAX_MS) : undefined,

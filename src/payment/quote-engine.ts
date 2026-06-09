@@ -119,6 +119,11 @@ export async function buildPaymentRequirements(
   //    before paying for an upstream quote. Returns 400 INVALID_INPUT.
   validateBuyerDestination(inputs);
 
+  // ── 2a. Enforce MAX_AMOUNT_IN cap if configured (TODO #8) ─────────
+  //    Bounds per-request economic exposure and avoids burning 1CS JWT
+  //    quota on absurd amounts.
+  enforceAmountInCap(inputs.amountIn, cfg.maxAmountIn);
+
   // ── 3. Build + send the quote request ─────────────────────────────
   const deadline = buildQuoteDeadline(cfg);
   const quoteRequest = buildSwapQuoteRequest(cfg, inputs, deadline);
@@ -326,6 +331,40 @@ export function validateBuyerDestination(inputs: SwapRequestInput): void {
       `Buyer destination format mismatch: ${reasons.map((r) => r.message).join("; ")}`,
       { reasons, destinationAsset, destinationAddress },
     );
+  }
+}
+
+/**
+ * Enforce the optional `MAX_AMOUNT_IN` cap (TODO #8).
+ *
+ * Compares the buyer's `amountIn` against `cfg.maxAmountIn` using BigInt
+ * arithmetic (safe for any 256-bit smallest-unit value). When unset, this
+ * is a no-op — preserves pre-TODO-#8 behaviour for dev deployments.
+ *
+ * Both inputs have already been validated as digit-only positive integers
+ * by their respective Zod schemas (`SwapRequestInputSchema` for the
+ * buyer's `amountIn`, `GatewayConfigSchema.maxAmountIn` for the cap), so
+ * `BigInt(...)` cannot throw here.
+ *
+ * @throws {InvalidInputError} with a `buyer-format` detail entry when
+ *   `amountIn > maxAmountIn`. Rejection happens BEFORE contacting 1CS so
+ *   we don't burn JWT quota on requests we'd never honour.
+ */
+export function enforceAmountInCap(
+  amountIn: string,
+  maxAmountIn: string | undefined,
+): void {
+  if (!maxAmountIn) return; // unset cap → no enforcement (dev-friendly default)
+
+  const amount = BigInt(amountIn);
+  const cap = BigInt(maxAmountIn);
+  if (amount > cap) {
+    const reason: ErrorDetail = {
+      source: "buyer-format",
+      path: "amountIn",
+      message: `amountIn ${amountIn} exceeds the operator-configured cap MAX_AMOUNT_IN=${maxAmountIn} (origin-asset smallest unit). Lower amountIn or contact the operator.`,
+    };
+    throw new InvalidInputError(reason.message, { reasons: [reason] });
   }
 }
 
