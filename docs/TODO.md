@@ -1,6 +1,6 @@
 # x402-1CS Swap Service — Production Readiness TODO
 
-**Last touched:** 2026-06-09 (TODO #5, #6, #8, #9 landed — PR A operability quick wins)
+**Last touched:** 2026-06-10 (independent audit pass — status refresh, new items #20–#25)
 **Test suite status:** 485 passing | 13 skipped (live-only, JWT-gated) — typecheck clean
 **Target:** prototype deployment for a small set of users / agents
 
@@ -29,7 +29,7 @@
 | Buyer-input validation (Zod + chain-format pre-check) | Working |
 | Discovery surfaces (`/openapi.json` + `/.well-known/x402` + ownership proofs) | Working |
 | TypeScript compilation | Clean |
-| ESLint | 0 errors, ~55 warnings (intentional `no-console` + unused-vars in tests) |
+| ESLint | 1 error (`no-redundant-type-constituents`, `provider-pool.test.ts:148`) + 60 warnings (intentional `no-console`) |
 
 ---
 
@@ -99,6 +99,16 @@ This is **not a code item** — it's an operator concern. See [docs/OPERATOR_GUI
 
 ---
 
+### 20. Local secrets hygiene — `.env` file mode + rotation policy
+
+**Risk:** `.env` holds the live facilitator private key and 1CS JWT with file mode `644` (readable by any local user), contradicting [Facilitator_keys_guidance.md](Facilitator_keys_guidance.md)'s own `chmod 600` mandate. `.env.test` duplicates the same JWT. (Verified not tracked in git, now or historically.)
+
+**Fix:** ~~`chmod 600 .env .env.test`~~ (done 2026-06-10); rotate the facilitator key and JWT if the machine is shared; use a secrets manager for any real deployment.
+
+**Files:** `.env`, `.env.test` (local only).
+
+---
+
 ## STRONGLY RECOMMENDED — Important for a stable prototype
 
 ### 7. Add structured logging
@@ -118,6 +128,30 @@ This is **not a code item** — it's an operator concern. See [docs/OPERATOR_GUI
 **Fix:** Add an `X-API-Key` middleware (simplest), mTLS, or an IP allowlist. The 402-discovery story still works against authenticated buyers — just adds a second factor for the gateway's economic exposure.
 
 **File:** [src/server.ts](../src/server.ts) (new middleware before paid routes).
+
+---
+
+### 21. Settlement concurrency guard (same-deposit-address race)
+
+**Current:** `store.update()` ([src/storage/store.ts](../src/storage/store.ts)) is read → validate-transition → write, with no compare-and-set. Verification spans multiple `await`s, so two interleaved `PAYMENT-SIGNATURE` requests for the same deposit address can both pass the `phase !== "QUOTED"` check in [src/http/middleware.ts](../src/http/middleware.ts) and both reach broadcast. Bounded on-chain — the second identical EIP-3009 tx reverts on the consumed nonce — so the impact is wasted facilitator gas, duplicate 1CS notifications, and interleaved state writes, not double payment.
+
+**Fix:** Per-deposit-address mutex around the verify→settle section, or CAS semantics in the store (`UPDATE … WHERE phase = ?` + affected-rows check). Add the concurrency test that proves it (two simultaneous submissions → one settles, the other 409s).
+
+---
+
+### 22. Fail-closed pre-broadcast checks (nonce + deadline)
+
+**Current:** Two pre-broadcast checks fail open. (a) The EIP-3009 `authorizationState` pre-check swallows RPC errors and "proceeds optimistically" ([src/payment/settler.ts](../src/payment/settler.ts), `broadcastEIP3009`) — a consumed nonce then yields a doomed, gas-wasting broadcast. (b) The quote deadline is not re-checked immediately before broadcast, so under settlement-limiter queuing the deposit can land after the 1CS address expires, sending the buyer through a refund cycle instead of a clean rejection.
+
+**Fix:** Reject with 503 when nonce state can't be confirmed; re-check the quote deadline right before broadcast.
+
+---
+
+### 23. Dependency refresh (ws advisory + SDK drift)
+
+**Current:** `npm audit --omit=dev` reports 6 moderate vulnerabilities (transitive `ws`, GHSA-58qx-3vcg-4xpx, via ethers/viem). `@x402/core` / `@x402/evm` are at 2.8.0 vs 2.14.0 published; `@defuse-protocol/one-click-sdk-typescript` at 0.1.17 vs 0.1.24.
+
+**Fix:** Bump `@x402/*` to 2.14.x and the 1CS SDK to 0.1.24 (review changelogs — these are protocol SDKs), then re-run `npm audit`. Avoid `npm audit fix --force` (would downgrade ethers).
 
 ---
 
@@ -179,7 +213,19 @@ Currently, changing the facilitator private key requires a full service restart.
 
 ### 19. Lint cleanup
 
-~55 ESLint warnings, all pre-existing (intentional `no-console` in `server.ts` + unused-vars in tests). Fix the unused-vars warnings in a single pass; leave `no-console` until structured logging (#7) lands.
+61 ESLint problems: 1 error (`@typescript-eslint/no-redundant-type-constituents` at `src/infra/provider-pool.test.ts:148`) + 60 intentional `no-console` warnings in `server.ts`. Fix the one error in a single pass; leave `no-console` until structured logging (#7) lands.
+
+---
+
+### 24. Quote dedup / short-TTL cache
+
+Every `GET /api/swap` mints a fresh *wet* 1CS quote (a real deposit address); the per-IP rate limiter is the only throttle, so an IP-rotating client can burn the operator's 1CS quota. Cache quotes keyed by the canonical buyer-input tuple with a TTL matching the quote deadline — also improves idempotency for clients that re-request before paying.
+
+---
+
+### 25. `/ready` endpoint
+
+`/health` exists ([src/server.ts](../src/server.ts)) but conflates liveness and readiness. Kubernetes-style deployments want a readiness probe reflecting "accepting settlements": store initialized, ≥1 healthy RPC provider, settlement capacity not exhausted.
 
 ---
 
@@ -190,17 +236,21 @@ Phase 1 — Go-live minimum
   ├── #1  TLS termination               (~30 min, infra)         [OPEN]
   ├── #2  File-based persistence        (~30 min)                [DONE 2026-05-13]
   ├── #3  Graceful shutdown (wait)      (~1-2 hrs)               [DONE 2026-05-13]
-  └── #4  Regulatory / KYC posture      (legal review, days–weeks) [OPEN]
+  ├── #4  Regulatory / KYC posture      (legal review, days–weeks) [OPEN]
+  └── #20 Local secrets hygiene         (minutes + rotation)     [OPEN — audit 2026-06-10]
 
-Phase 2 — Stable prototype (items 5-10)
+Phase 2 — Stable prototype
   ├── #5  RPC startup validation        (~20 min)                [DONE 2026-06-09]
   ├── #6  JWT expiry check              (~20 min)                [DONE 2026-06-09]
   ├── #8  MAX_AMOUNT_IN cap             (~30 min)                [DONE 2026-06-09]
   ├── #9  Configurable slippage         (~30 min)                [DONE 2026-06-09]
   ├── #10 Gateway authentication        (~1 hr)                  [OPEN — PR B]
-  └── #7  Structured logging            (~2 hrs)                 [OPEN — PR C]
+  ├── #7  Structured logging            (~2 hrs)                 [OPEN — PR C]
+  ├── #21 Settlement concurrency guard  (~2-3 hrs)               [OPEN — audit 2026-06-10]
+  ├── #22 Fail-closed nonce/deadline    (~1 hr)                  [OPEN — audit 2026-06-10]
+  └── #23 Dependency refresh            (~1-2 hrs)               [OPEN — audit 2026-06-10]
 
-Phase 3 — Production hardening (items 11-19)
+Phase 3 — Production hardening (items 11–19, 24–25)
   └── As needed based on scale, jurisdiction, and operational experience
 ```
 
